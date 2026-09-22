@@ -53,7 +53,7 @@ Migrate both service databases before starting Flexgateway:
 cd ../energydesk-flexgateway-service
 sh scripts/migrate_openadr.sh upgrade head
 sh scripts/migrate_gateway.sh upgrade head
-APP_PORT=8000 python -m main
+APP_PORT=8444 python -m main
 ```
 
 `OPENADR_DEV_AUTH_BYPASS` is deliberately opt-in and must never be enabled in a
@@ -62,8 +62,9 @@ shared or deployed environment.
 In another shell:
 
 ```sh
-export FLEXGATEWAY_BASE_URL=http://localhost:8000/openadr3
-flexgateway-demo demo --resources examples/transport-sites.json
+cd ~/PycharmProjects/energydesk-flexgateway-client
+python -m energydesk_flexgateway_client.cli demo \
+  --resources ./examples/transport-sites.json
 ```
 
 Before running the demo, use the Flexgateway operator portal to create the VEN,
@@ -112,17 +113,64 @@ The partner credentials in this repository and the validator credentials in the
 service should be separate in a shared environment. A Google/OIDC portal session
 is also separate and does not authenticate command-line API requests.
 
-## Individual commands
+## Run the six-resource local example
 
-```sh
-flexgateway-demo list-vens
-flexgateway-demo register-resource --resource examples/transport-sites.json
-flexgateway-demo list-resources
-flexgateway-demo get-resource RESOURCE_UUID
+Run these commands from the `energydesk-flexgateway-client` repository root. The
+root `.env` should contain the VEN-bound OAuth client credentials and these local
+URLs:
+
+```dotenv
+FLEXGATEWAY_BASE_URL=http://localhost:8444/openadr3
+OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL=http://localhost:8001/o/token/
+OAUTH_CLIENT_ID=<VEN API client ID>
+OAUTH_CLIENT_SECRET=<VEN API client secret>
 ```
 
-`register-resource` accepts either one JSON resource object or an array manifest.
-For a manifest it registers every entry and prints an array of responses.
+First confirm which VEN is assigned to the OAuth client:
+
+```sh
+python -m energydesk_flexgateway_client.cli list-vens
+```
+
+Register the six resources once. Although the option is named `--resource`, it
+accepts both a single JSON object and the array in `transport-sites.json`:
+
+```sh
+python -m energydesk_flexgateway_client.cli register-resource \
+  --resource ./examples/transport-sites.json
+```
+
+List all resources visible to this VEN:
+
+```sh
+python -m energydesk_flexgateway_client.cli list-resources
+```
+
+Run the complete smoke test instead when you want to register all six resources,
+repeat every registration to verify idempotency, and confirm that all six appear
+in the list response:
+
+```sh
+python -m energydesk_flexgateway_client.cli demo \
+  --resources ./examples/transport-sites.json
+```
+
+Registration is an upsert keyed by the VEN and `external_resource_id`, so running
+either registration command again updates the same six resources rather than
+creating duplicates.
+
+## Other commands
+
+```sh
+python -m energydesk_flexgateway_client.cli get-resource RESOURCE_UUID
+```
+
+If the package was installed with `python -m pip install -e .`, the shorter
+`flexgateway-demo` executable is equivalent. For example:
+
+```sh
+flexgateway-demo demo --resources ./examples/transport-sites.json
+```
 
 All commands accept `--base-url` and `--access-token`. Command-line values override
 environment values.

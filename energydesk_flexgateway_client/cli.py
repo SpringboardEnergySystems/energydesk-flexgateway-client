@@ -82,7 +82,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--base-url",
-        default=os.getenv("FLEXGATEWAY_BASE_URL", "http://localhost:8000/openadr3"),
+        default=os.getenv("FLEXGATEWAY_BASE_URL", "http://localhost:8444/openadr3"),
     )
     parser.add_argument(
         "--access-token", help="Bearer token; preferably use the environment"
