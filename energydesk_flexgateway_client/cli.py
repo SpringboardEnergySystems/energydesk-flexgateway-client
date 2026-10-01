@@ -11,6 +11,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .client import FlexgatewayApiError, FlexgatewayClient, fetch_access_token
+from .readings import generate_readings
 
 
 def _load_json(path: str) -> Any:
@@ -46,6 +47,11 @@ def _load_data_points(path: str) -> list[dict[str, Any]]:
     if not points or not all(isinstance(item, dict) for item in points):
         raise ValueError("report-data file must be a non-empty JSON object or array")
     return points
+
+
+def _resource_file_stem(resource: dict[str, Any]) -> str:
+    raw = resource.get("external_resource_id") or resource.get("id") or "resource"
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in str(raw))
 
 
 def _print_json(payload: Any) -> None:
@@ -139,6 +145,20 @@ def _parser() -> argparse.ArgumentParser:
     get_report_data.add_argument("--start-time")
     get_report_data.add_argument("--end-time")
 
+    generate_readings_cmd = commands.add_parser(
+        "generate-readings",
+        help="Write one JSON file per currently-registered resource with synthetic interval readings",
+    )
+    generate_readings_cmd.add_argument("--out-dir", required=True)
+    generate_readings_cmd.add_argument("--days", type=int, default=30)
+    generate_readings_cmd.add_argument("--interval-minutes", type=int, default=15)
+
+    report_readings_cmd = commands.add_parser(
+        "report-readings",
+        help="Submit every *.json file in a directory (from generate-readings) as bulk report data",
+    )
+    report_readings_cmd.add_argument("--dir", required=True)
+
     demo = commands.add_parser("demo")
     resource_input = demo.add_mutually_exclusive_group(required=True)
     resource_input.add_argument(
@@ -179,6 +199,55 @@ def run(args: argparse.Namespace) -> int:
                     start_time=args.start_time,
                     end_time=args.end_time,
                 )
+            )
+        elif args.command == "generate-readings":
+            resources = client.list_resources()
+            if not resources:
+                raise RuntimeError("no resources registered for this VEN -- register some first")
+            out_dir = Path(args.out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            written = []
+            for resource in resources:
+                data_points = generate_readings(
+                    resource, days=args.days, interval_minutes=args.interval_minutes
+                )
+                path = out_dir / f"{_resource_file_stem(resource)}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "resource_id": resource.get("id"),
+                            "external_resource_id": resource.get("external_resource_id"),
+                            "resource_name": resource.get("resource_name"),
+                            "resource_type": resource.get("resource_type"),
+                            "data_points": data_points,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                written.append({"file": str(path), "resource_id": resource.get("id"), "points": len(data_points)})
+            _print_json({"status": "ok", "files_written": len(written), "files": written})
+        elif args.command == "report-readings":
+            in_dir = Path(args.dir)
+            files = sorted(in_dir.glob("*.json"))
+            if not files:
+                raise RuntimeError(f"no .json files found in {in_dir}")
+            results = []
+            for path in files:
+                payload = _load_json(str(path))
+                resource_id = payload.get("resource_id")
+                data_points = payload.get("data_points")
+                if not resource_id or not data_points:
+                    raise ValueError(f"{path}: missing resource_id or data_points")
+                result = client.submit_report_data_bulk(resource_id, data_points)
+                results.append({"file": str(path), **result})
+            _print_json(
+                {
+                    "status": "ok",
+                    "files_reported": len(results),
+                    "total_entries_written": sum(r["entries_written"] for r in results),
+                    "results": results,
+                }
             )
         elif args.command == "demo":
             resources = _load_resources(args.resources or args.resource)

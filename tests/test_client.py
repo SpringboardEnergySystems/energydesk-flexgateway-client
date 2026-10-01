@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from energydesk_flexgateway_client import (
     fetch_access_token,
 )
 from energydesk_flexgateway_client.cli import _load_resource, _load_resources
+from energydesk_flexgateway_client.readings import generate_readings
 
 
 def test_fetch_access_token_uses_client_credentials_without_exposing_secret():
@@ -174,3 +176,74 @@ def test_register_resource_command_accepts_a_manifest(monkeypatch, tmp_path, cap
         {"id": "created-charger-1"},
         {"id": "created-battery-1"},
     ]
+
+
+def test_generate_readings_covers_the_full_period_with_no_gaps():
+    end = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    points = generate_readings(
+        {"id": "r1", "resource_type": "solar"},
+        days=2,
+        interval_minutes=15,
+        end=end,
+    )
+
+    assert len(points) == 2 * 24 * 4
+    assert points[0]["interval_start"] == "2026-09-29T12:00:00Z"
+    assert points[-1]["interval_start"] == "2026-10-01T11:45:00Z"
+    assert all(isinstance(p["value"], float) for p in points)
+    # solar must be exactly zero overnight
+    assert any(p["value"] == 0.0 for p in points)
+
+
+def test_generate_readings_is_deterministic_for_the_same_resource():
+    resource = {"id": "r1", "resource_type": "battery"}
+    first = generate_readings(resource, days=1, interval_minutes=60)
+    second = generate_readings(resource, days=1, interval_minutes=60)
+    assert first == second
+
+
+def test_generate_and_report_readings_commands(monkeypatch, tmp_path, capsys):
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def list_resources(self):
+            return [{"id": "r1", "external_resource_id": "site-1", "resource_type": "solar"}]
+
+        def submit_report_data_bulk(self, resource_id, data_points):
+            return {
+                "resource_id": resource_id,
+                "entries_written": len(data_points),
+                "series_id": 1,
+            }
+
+    monkeypatch.setattr(cli, "FlexgatewayClient", FakeClient)
+    out_dir = tmp_path / "readings"
+
+    gen_args = cli._parser().parse_args(
+        [
+            "--access-token", "test-token",
+            "generate-readings", "--out-dir", str(out_dir),
+            "--days", "1", "--interval-minutes", "60",
+        ]
+    )
+    assert cli.run(gen_args) == 0
+    gen_output = json.loads(capsys.readouterr().out)
+    assert gen_output["files_written"] == 1
+    written_files = list(out_dir.glob("*.json"))
+    assert len(written_files) == 1
+    assert written_files[0].name == "site-1.json"
+
+    report_args = cli._parser().parse_args(
+        ["--access-token", "test-token", "report-readings", "--dir", str(out_dir)]
+    )
+    assert cli.run(report_args) == 0
+    report_output = json.loads(capsys.readouterr().out)
+    assert report_output["files_reported"] == 1
+    assert report_output["total_entries_written"] == 24
