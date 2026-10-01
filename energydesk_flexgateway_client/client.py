@@ -103,9 +103,12 @@ class FlexgatewayClient:
         method: str,
         path: str,
         *,
-        json: Mapping[str, Any] | None = None,
+        json: Any | None = None,
+        params: Mapping[str, Any] | None = None,
     ) -> Any:
-        response = self._client.request(method, path.lstrip("/"), json=json)
+        response = self._client.request(
+            method, path.lstrip("/"), json=json, params=params
+        )
         if not response.is_success:
             raise FlexgatewayApiError(
                 method,
@@ -128,3 +131,52 @@ class FlexgatewayClient:
 
     def get_resource(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"resources/{resource_id}")
+
+    def create_report(self, report: Mapping[str, Any]) -> dict[str, Any]:
+        """Declare a report: what resource, what reading_type/report_type,
+        at what interval_period. Returns the report, including its id --
+        pass that id to submit_report_data."""
+        return self._request("POST", "reports", json=report)
+
+    def list_reports(self) -> list[dict[str, Any]]:
+        return self._request("GET", "reports")
+
+    def submit_report_data(
+        self, report_id: str, data_points: list[Mapping[str, Any]]
+    ) -> dict[str, Any]:
+        """Upsert meter readings against an existing report. Each point is
+        {"interval_start": <ISO 8601>, "value": <float>}. Resubmitting the
+        same interval_start is safe and idempotent -- it overwrites, not
+        duplicates."""
+        return self._request(
+            "POST",
+            "report_data",
+            json=list(data_points),
+            params={"report_id": report_id},
+        )
+
+    def submit_report_data_bulk(
+        self,
+        resource_id: str,
+        data_points: list[Mapping[str, Any]],
+        *,
+        report_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Historical/bulk meter data directly against a resource, without
+        requiring a report to exist first. report_id is optional context."""
+        params: dict[str, Any] = {"resource_id": resource_id}
+        if report_id:
+            params["report_id"] = report_id
+        return self._request(
+            "POST", "report_data/bulk", json=list(data_points), params=params
+        )
+
+    def get_report_data(
+        self,
+        report_id: str,
+        *,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> dict[str, Any]:
+        params = {k: v for k, v in {"start_time": start_time, "end_time": end_time}.items() if v}
+        return self._request("GET", f"report_data/{report_id}", params=params)

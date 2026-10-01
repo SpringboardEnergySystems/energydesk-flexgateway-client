@@ -56,6 +56,41 @@ def test_resource_registration_and_reads_send_bearer_token():
     assert requests[0].url == "https://gateway.example/flexibility/openadr3/resources"
 
 
+def test_report_and_report_data_round_trip():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer partner-token"
+        if request.url.path.endswith("/reports") and request.method == "POST":
+            return httpx.Response(201, json={"id": "report-1", "report_name": "Usage"})
+        if request.url.path.endswith("/reports") and request.method == "GET":
+            return httpx.Response(200, json=[{"id": "report-1"}])
+        if request.url.path.endswith("/report_data"):
+            assert request.url.params["report_id"] == "report-1"
+            return httpx.Response(
+                201,
+                json={"report_id": "report-1", "resource_id": "r1", "entries_written": 2, "series_id": 1},
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    with FlexgatewayClient(
+        "https://gateway.example/flexibility/openadr3/",
+        "partner-token",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        report = client.create_report({"report_name": "Usage", "resource_id": "r1", "report_type": "usage", "reading_type": "energy"})
+        reports = client.list_reports()
+        result = client.submit_report_data(
+            "report-1",
+            [{"interval_start": "2026-10-01T12:00:00Z", "value": 3.2}],
+        )
+
+    assert report["id"] == "report-1"
+    assert reports == [{"id": "report-1"}]
+    assert result["entries_written"] == 2
+
+
 def test_api_error_preserves_status_and_safe_detail():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"detail": "resource is not owned by caller"})

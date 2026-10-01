@@ -33,6 +33,21 @@ def _load_resources(path: str) -> list[dict[str, Any]]:
     return resources
 
 
+def _load_report(path: str) -> dict[str, Any]:
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError("report payload must be a JSON object")
+    return payload
+
+
+def _load_data_points(path: str) -> list[dict[str, Any]]:
+    payload = _load_json(path)
+    points = payload if isinstance(payload, list) else [payload]
+    if not points or not all(isinstance(item, dict) for item in points):
+        raise ValueError("report-data file must be a non-empty JSON object or array")
+    return points
+
+
 def _print_json(payload: Any) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))
 
@@ -104,6 +119,26 @@ def _parser() -> argparse.ArgumentParser:
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
+    create_report = commands.add_parser(
+        "create-report", help="Declare a report against a registered resource"
+    )
+    create_report.add_argument("--report", required=True, help="report JSON file")
+
+    commands.add_parser("list-reports")
+
+    submit_report_data = commands.add_parser(
+        "submit-report-data", help="Upsert meter readings against a report"
+    )
+    submit_report_data.add_argument("--report-id", required=True)
+    submit_report_data.add_argument(
+        "--data", required=True, help="JSON file: list of {interval_start, value}"
+    )
+
+    get_report_data = commands.add_parser("get-report-data")
+    get_report_data.add_argument("report_id")
+    get_report_data.add_argument("--start-time")
+    get_report_data.add_argument("--end-time")
+
     demo = commands.add_parser("demo")
     resource_input = demo.add_mutually_exclusive_group(required=True)
     resource_input.add_argument(
@@ -130,6 +165,21 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.list_resources())
         elif args.command == "get-resource":
             _print_json(client.get_resource(args.resource_id))
+        elif args.command == "create-report":
+            _print_json(client.create_report(_load_report(args.report)))
+        elif args.command == "list-reports":
+            _print_json(client.list_reports())
+        elif args.command == "submit-report-data":
+            data_points = _load_data_points(args.data)
+            _print_json(client.submit_report_data(args.report_id, data_points))
+        elif args.command == "get-report-data":
+            _print_json(
+                client.get_report_data(
+                    args.report_id,
+                    start_time=args.start_time,
+                    end_time=args.end_time,
+                )
+            )
         elif args.command == "demo":
             resources = _load_resources(args.resources or args.resource)
             vens = client.list_vens()
