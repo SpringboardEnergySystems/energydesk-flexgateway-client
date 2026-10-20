@@ -1,4 +1,4 @@
-"""Command-line interface for the Flexgateway reference client."""
+"""Command-line interface for the Flexgateway reference client (OpenADR 3.1.0)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from .client import FlexgatewayApiError, FlexgatewayClient, fetch_access_token
+from .client import FlexgatewayApiError, FlexgatewayClient, discover_token_url, fetch_access_token
+from .webhooks import make_server
+
+DEFAULT_BASE_URL = "http://localhost:8444/openadr3"
 
 
 def _load_json(path: str) -> Any:
@@ -18,23 +21,26 @@ def _load_json(path: str) -> Any:
         return json.load(handle)
 
 
-def _load_resource(path: str) -> dict[str, Any]:
+def _load_objects(path: str) -> list[dict[str, Any]]:
+    """A JSON object, or a non-empty array of objects."""
     payload = _load_json(path)
-    if not isinstance(payload, dict):
-        raise ValueError("resource payload must be a JSON object")
-    return payload
+    items = payload if isinstance(payload, list) else [payload]
+    if not items or not all(isinstance(item, dict) for item in items):
+        raise ValueError(f"{path} must contain a JSON object or a non-empty array of objects")
+    return items
 
 
-def _load_resources(path: str) -> list[dict[str, Any]]:
-    payload = _load_json(path)
-    resources = payload if isinstance(payload, list) else [payload]
-    if not resources or not all(isinstance(item, dict) for item in resources):
-        raise ValueError("resource manifest must be a non-empty JSON object or array")
-    return resources
+def _redact(value: Any) -> Any:
+    """Never echo a webhook bearer token to the terminal (it ends up in shell history and CI logs)."""
+    if isinstance(value, dict):
+        return {k: ("***" if k == "bearerToken" and v else _redact(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return value
 
 
 def _print_json(payload: Any) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    print(json.dumps(_redact(payload), indent=2, sort_keys=True, default=str))
 
 
 def _access_token(args: argparse.Namespace) -> str:
@@ -42,133 +48,153 @@ def _access_token(args: argparse.Namespace) -> str:
     if ready_token:
         return ready_token
 
+    client_id = args.client_id or os.getenv("OAUTH_CLIENT_ID") or os.getenv("ENERGYDESK_CLIENT_ID")
+    client_secret = args.client_secret or os.getenv("OAUTH_CLIENT_SECRET") or os.getenv("ENERGYDESK_CLIENT_SECRET")
+    missing = [n for n, v in (("OAUTH_CLIENT_ID", client_id), ("OAUTH_CLIENT_SECRET", client_secret)) if not v]
+    if missing:
+        raise ValueError("provide FLEXGATEWAY_ACCESS_TOKEN or OAuth settings: " + ", ".join(missing))
+    # The VTN says where its token endpoint is; an explicit URL (for example the appserver's) overrides that.
     token_url = (
         args.token_url
         or os.getenv("OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL")
         or os.getenv("ENERGYDESK_TOKEN_URL")
-    )
-    client_id = (
-        args.client_id
-        or os.getenv("OAUTH_CLIENT_ID")
-        or os.getenv("ENERGYDESK_CLIENT_ID")
-    )
-    client_secret = (
-        args.client_secret
-        or os.getenv("OAUTH_CLIENT_SECRET")
-        or os.getenv("ENERGYDESK_CLIENT_SECRET")
+        or discover_token_url(args.base_url)
     )
     scope = args.scope or os.getenv("OAUTH_SCOPE") or os.getenv("ENERGYDESK_SCOPE")
-    missing = [
-        name
-        for name, value in (
-            ("OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL", token_url),
-            ("OAUTH_CLIENT_ID", client_id),
-            ("OAUTH_CLIENT_SECRET", client_secret),
-        )
-        if not value
-    ]
-    if missing:
-        raise ValueError(
-            "provide FLEXGATEWAY_ACCESS_TOKEN or OAuth settings: "
-            + ", ".join(missing)
-        )
     return fetch_access_token(token_url, client_id, client_secret, scope=scope)
+
+
+def _webhook_token() -> str:
+    token = os.getenv("WEBHOOK_BEARER_TOKEN")
+    if not token:
+        raise ValueError("set WEBHOOK_BEARER_TOKEN (a secret of your own choosing) in the environment or .env")
+    return token
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="flexgateway-demo",
-        description="Exercise the partner-facing EnergyDesk Flexgateway API",
+        description="Exercise the VEN-facing EnergyDesk Flexgateway API (OpenADR 3.1.0)",
     )
-    parser.add_argument(
-        "--base-url",
-        default=os.getenv("FLEXGATEWAY_BASE_URL", "http://localhost:8444/openadr3"),
-    )
-    parser.add_argument(
-        "--access-token", help="Bearer token; preferably use the environment"
-    )
-    parser.add_argument("--token-url")
+    parser.add_argument("--base-url", default=os.getenv("FLEXGATEWAY_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument("--ven-name", default=os.getenv("FLEXGATEWAY_VEN_NAME"),
+                        help="name for the ven, used only the first time (the client creates it if it does not exist)")
+    parser.add_argument("--access-token", help="bearer token; preferably use the environment")
+    parser.add_argument("--token-url", help="default: asked from the VTN (GET /auth/server)")
     parser.add_argument("--client-id")
-    parser.add_argument("--client-secret")
+    parser.add_argument("--client-secret", help="prefer OAUTH_CLIENT_SECRET in the environment")
     parser.add_argument("--scope")
 
     commands = parser.add_subparsers(dest="command", required=True)
-
+    commands.add_parser("discover", help="print where the VTN issues tokens (no authentication)")
     commands.add_parser("list-vens")
+    commands.add_parser("ensure-ven", help="create this client's ven if it does not exist, and print it")
 
-    register_resource = commands.add_parser("register-resource")
-    register_resource.add_argument("--resource", required=True)
-
+    register = commands.add_parser("register-resources", help="create or update resources (idempotent)")
+    register.add_argument("--resources", required=True, help="JSON file: a VEN_RESOURCE_REQUEST or an array of them")
     commands.add_parser("list-resources")
-
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
-    demo = commands.add_parser("demo")
-    resource_input = demo.add_mutually_exclusive_group(required=True)
-    resource_input.add_argument(
-        "--resources",
-        help="JSON manifest containing one or more resource objects",
-    )
-    resource_input.add_argument(
-        "--resource",
-        help="single-resource JSON file (backwards-compatible alias)",
-    )
+    commands.add_parser("list-programs", help="programs your resources are enrolled in")
+    events = commands.add_parser("list-events")
+    events.add_argument("--program-id")
+    events.add_argument("--active", action="store_true", help="only events running now")
+
+    report = commands.add_parser("send-report", help="post a reportRequest")
+    report.add_argument("--report", required=True, help="JSON file: a reportRequest")
+    commands.add_parser("list-reports")
+
+    subscribe = commands.add_parser("subscribe", help="receive notifications at an https callback")
+    subscribe.add_argument("--callback-url", required=True)
+    subscribe.add_argument("--objects", default="EVENT,PROGRAM", help="comma separated object types")
+    subscribe.add_argument("--operations", default="CREATE,UPDATE,DELETE")
+    subscribe.add_argument("--program-id")
+    commands.add_parser("list-subscriptions")
+    delete = commands.add_parser("delete-subscription")
+    delete.add_argument("subscription_id")
+
+    serve = commands.add_parser("serve-webhooks", help="run a development receiver that prints notifications")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=9000)
+
+    demo = commands.add_parser("demo", help="token, ven, resources (twice, to prove idempotency), programs, events")
+    demo.add_argument("--resources", required=True, help="JSON file: a VEN_RESOURCE_REQUEST or an array of them")
     return parser
 
 
+def _demo(client: FlexgatewayClient, resources: list[dict[str, Any]]) -> dict[str, Any]:
+    ven = client.ensure_ven()
+    registered = []
+    for resource in resources:
+        first = client.register_resource(resource)
+        second = client.register_resource(resource)
+        if first.get("id") != second.get("id"):
+            raise RuntimeError(f"idempotency check failed for {resource['resourceName']}: the id changed")
+        registered.append(first)
+    visible = {item["id"] for item in client.list_resources()}
+    missing = [item["id"] for item in registered if item["id"] not in visible]
+    if missing:
+        raise RuntimeError(f"{len(missing)} registered resource(s) are missing from the list")
+    programs = client.list_programs()
+    return {
+        "status": "ok",
+        "ven": ven,
+        "resources": registered,
+        "idempotent_retry": True,
+        "visible_resource_count": len(visible),
+        "programs": [{"id": p["id"], "programName": p["programName"]} for p in programs],
+        "event_count": len(client.list_events()),
+        "note": "No programs yet? The operator enrolls an approved resource in a program; it then appears here.",
+    }
+
+
 def run(args: argparse.Namespace) -> int:
+    if args.command == "discover":
+        print(discover_token_url(args.base_url))
+        return 0
+    if args.command == "serve-webhooks":
+        server = make_server(args.host, args.port, _webhook_token(), lambda n: _print_json(n))
+        print(f"listening on http://{args.host}:{args.port} (Ctrl-C to stop)")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            server.server_close()
+        return 0
+
     token = _access_token(args)
-    with FlexgatewayClient(args.base_url, token) as client:
+    with FlexgatewayClient(args.base_url, token, ven_name=args.ven_name) as client:
         if args.command == "list-vens":
             _print_json(client.list_vens())
-        elif args.command == "register-resource":
-            resources = _load_resources(args.resource)
-            registered = [client.register_resource(resource) for resource in resources]
+        elif args.command == "ensure-ven":
+            _print_json(client.ensure_ven())
+        elif args.command == "register-resources":
+            registered = [client.register_resource(r) for r in _load_objects(args.resources)]
             _print_json(registered[0] if len(registered) == 1 else registered)
         elif args.command == "list-resources":
             _print_json(client.list_resources())
         elif args.command == "get-resource":
             _print_json(client.get_resource(args.resource_id))
+        elif args.command == "list-programs":
+            _print_json(client.list_programs())
+        elif args.command == "list-events":
+            _print_json(client.list_events(args.program_id, active=True if args.active else None))
+        elif args.command == "send-report":
+            (report,) = _load_objects(args.report)
+            _print_json(client.create_report(report))
+        elif args.command == "list-reports":
+            _print_json(client.list_reports())
+        elif args.command == "subscribe":
+            _print_json(client.subscribe(
+                args.callback_url, client_name=args.ven_name or "flexgateway-demo",
+                objects=tuple(args.objects.split(",")), operations=tuple(args.operations.split(",")),
+                bearer_token=os.getenv("WEBHOOK_BEARER_TOKEN"), program_id=args.program_id))
+        elif args.command == "list-subscriptions":
+            _print_json(client.list_subscriptions())
+        elif args.command == "delete-subscription":
+            _print_json(client.delete_subscription(args.subscription_id))
         elif args.command == "demo":
-            resources = _load_resources(args.resources or args.resource)
-            vens = client.list_vens()
-            if len(vens) != 1:
-                raise RuntimeError(
-                    f"expected exactly one assigned VEN, received {len(vens)}"
-                )
-            registered = []
-            for resource in resources:
-                first = client.register_resource(resource)
-                second = client.register_resource(resource)
-                if first.get("id") != second.get("id"):
-                    external_id = resource.get("external_resource_id", "<unknown>")
-                    raise RuntimeError(
-                        "idempotency check failed for "
-                        f"{external_id}: repeated registration changed ID"
-                    )
-                registered.append(first)
-            visible = client.list_resources()
-            visible_ids = {item.get("id") for item in visible}
-            missing_ids = [
-                item.get("id")
-                for item in registered
-                if item.get("id") not in visible_ids
-            ]
-            if missing_ids:
-                raise RuntimeError(
-                    f"{len(missing_ids)} registered resource(s) are missing from caller's list"
-                )
-            _print_json(
-                {
-                    "status": "ok",
-                    "ven": vens[0],
-                    "resources": registered,
-                    "registered_resource_count": len(registered),
-                    "idempotent_retry": True,
-                    "visible_resource_count": len(visible),
-                }
-            )
+            _print_json(_demo(client, _load_objects(args.resources)))
         else:
             raise AssertionError(f"unsupported command: {args.command}")
     return 0

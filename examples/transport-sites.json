@@ -1,149 +1,283 @@
 [
   {
-    "resource_name": "Transport Site Bergen - EV charging load",
-    "resource_type": "ev_charger",
-    "external_resource_id": "chargitect-bergen-ev-load-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000001",
-      "latitude": 60.3913,
-      "longitude": 5.3221,
-      "address": "Synthetic transport site, Bergen"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-bergen-ev-load-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["ev_charging"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000001"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["1200"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "ev_charger"
+        ]
+      },
+      {
+        "type": "LOCATION",
+        "values": [
+          5.3221,
+          60.3913
+        ]
+      },
+      {
+        "type": "MAX_POWER_CONSUMPTION",
+        "values": [
+          1200.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Bergen - EV charging load"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "ev_charging"
+        ]
       }
     ]
   },
   {
-    "resource_name": "Transport Site Bergen - Battery",
-    "resource_type": "battery",
-    "external_resource_id": "chargitect-bergen-battery-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000001",
-      "latitude": 60.3913,
-      "longitude": 5.3221,
-      "address": "Synthetic transport site, Bergen"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-bergen-battery-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["lithium_ion"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000001"
+        ]
       },
       {
-        "attribute_name": "energy_capacity_kwh",
-        "attribute_type": "technical",
-        "attribute_values": ["1000"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "battery"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["500"]
+        "type": "LOCATION",
+        "values": [
+          5.3221,
+          60.3913
+        ]
+      },
+      {
+        "type": "MAX_POWER_CONSUMPTION",
+        "values": [
+          500.0
+        ]
+      },
+      {
+        "type": "MAX_POWER_EXPORT",
+        "values": [
+          500.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Bergen - Battery"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "lithium_ion"
+        ]
+      },
+      {
+        "type": "ENERGY_CAPACITY_KWH",
+        "values": [
+          1000.0
+        ]
       }
     ]
   },
   {
-    "resource_name": "Transport Site Bergen - Solar production",
-    "resource_type": "solar",
-    "external_resource_id": "chargitect-bergen-solar-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000001",
-      "latitude": 60.3913,
-      "longitude": 5.3221,
-      "address": "Synthetic transport site, Bergen"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-bergen-solar-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["solar_pv"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000001"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["350"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "solar"
+        ]
+      },
+      {
+        "type": "LOCATION",
+        "values": [
+          5.3221,
+          60.3913
+        ]
+      },
+      {
+        "type": "MAX_POWER_EXPORT",
+        "values": [
+          350.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Bergen - Solar production"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "solar_pv"
+        ]
       }
     ]
   },
   {
-    "resource_name": "Transport Site Oslo - EV charging load",
-    "resource_type": "ev_charger",
-    "external_resource_id": "chargitect-oslo-ev-load-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000002",
-      "latitude": 59.9139,
-      "longitude": 10.7522,
-      "address": "Synthetic transport site, Oslo"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-oslo-ev-load-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["ev_charging"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000002"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["1800"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "ev_charger"
+        ]
+      },
+      {
+        "type": "LOCATION",
+        "values": [
+          10.7522,
+          59.9139
+        ]
+      },
+      {
+        "type": "MAX_POWER_CONSUMPTION",
+        "values": [
+          1800.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Oslo - EV charging load"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "ev_charging"
+        ]
       }
     ]
   },
   {
-    "resource_name": "Transport Site Oslo - Battery",
-    "resource_type": "battery",
-    "external_resource_id": "chargitect-oslo-battery-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000002",
-      "latitude": 59.9139,
-      "longitude": 10.7522,
-      "address": "Synthetic transport site, Oslo"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-oslo-battery-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["lithium_ion"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000002"
+        ]
       },
       {
-        "attribute_name": "energy_capacity_kwh",
-        "attribute_type": "technical",
-        "attribute_values": ["1500"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "battery"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["750"]
+        "type": "LOCATION",
+        "values": [
+          10.7522,
+          59.9139
+        ]
+      },
+      {
+        "type": "MAX_POWER_CONSUMPTION",
+        "values": [
+          750.0
+        ]
+      },
+      {
+        "type": "MAX_POWER_EXPORT",
+        "values": [
+          750.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Oslo - Battery"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "lithium_ion"
+        ]
+      },
+      {
+        "type": "ENERGY_CAPACITY_KWH",
+        "values": [
+          1500.0
+        ]
       }
     ]
   },
   {
-    "resource_name": "Transport Site Oslo - Solar production",
-    "resource_type": "solar",
-    "external_resource_id": "chargitect-oslo-solar-001",
-    "service_location": {
-      "meterpoint_id": "707057500000000002",
-      "latitude": 59.9139,
-      "longitude": 10.7522,
-      "address": "Synthetic transport site, Oslo"
-    },
+    "objectType": "VEN_RESOURCE_REQUEST",
+    "resourceName": "chargitect-oslo-solar-001",
     "attributes": [
       {
-        "attribute_name": "technology",
-        "attribute_type": "technical",
-        "attribute_values": ["solar_pv"]
+        "type": "METER_POINT_ID",
+        "values": [
+          "707057500000000002"
+        ]
       },
       {
-        "attribute_name": "rated_power_kw",
-        "attribute_type": "technical",
-        "attribute_values": ["500"]
+        "type": "RESOURCE_TYPE",
+        "values": [
+          "solar"
+        ]
+      },
+      {
+        "type": "LOCATION",
+        "values": [
+          10.7522,
+          59.9139
+        ]
+      },
+      {
+        "type": "MAX_POWER_EXPORT",
+        "values": [
+          500.0
+        ]
+      },
+      {
+        "type": "DESCRIPTION",
+        "values": [
+          "Transport Site Oslo - Solar production"
+        ]
+      },
+      {
+        "type": "TECHNOLOGY",
+        "values": [
+          "solar_pv"
+        ]
       }
     ]
   }

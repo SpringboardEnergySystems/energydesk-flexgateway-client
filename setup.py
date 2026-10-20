@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="energydesk-flexgateway-client",
-    version="0.1.0",
+    version="0.2.0",
     description="Reference client and contract test for the EnergyDesk Flexgateway API",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",

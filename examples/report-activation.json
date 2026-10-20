@@ -1,0 +1,54 @@
+{
+  "eventID": "<id of an event you can see>",
+  "clientName": "my-ven",
+  "resources": [
+    {
+      "resourceName": "chargitect-bergen-battery-001",
+      "intervals": [
+        {
+          "id": 0,
+          "intervalPeriod": {
+            "start": "2026-10-21T08:00:00Z",
+            "duration": "PT15M"
+          },
+          "payloads": [
+            {
+              "type": "USAGE",
+              "values": [
+                -0.05
+              ]
+            },
+            {
+              "type": "BASELINE",
+              "values": [
+                0.5
+              ]
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "intervalPeriod": {
+            "start": "2026-10-21T08:15:00Z",
+            "duration": "PT15M"
+          },
+          "payloads": [
+            {
+              "type": "USAGE",
+              "values": [
+                -0.05
+              ]
+            },
+            {
+              "type": "BASELINE",
+              "values": [
+                0.5
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "reportName": "activation 2026-10-21 08:00"
+}
