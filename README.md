@@ -74,8 +74,16 @@ flexgateway-demo subscribe --callback-url http://127.0.0.1:9301 --objects EVENT 
 * The VTN stores it encrypted. The key for that (`SUBSCRIPTION_TOKEN_KEY`) belongs to the **server operator**;
   you never need it.
 * You are notified only of changes made after you subscribed, and only for objects you are allowed to see.
-* Delivery is retried with backoff and then given up on, so treat webhooks as a hint and keep a periodic poll as
-  the source of truth.
+* Delivery is retried with backoff for about 13 minutes and then given up on, so treat webhooks as a hint and keep a
+  periodic poll as the source of truth.
+* **If your receiver stops answering, the VTN backs off and comes back by itself.** After a lasting run of failures it
+  sends only one notification per 15 minutes; after 48 hours without a success it stops and probes you at 1, 3, 6, 12,
+  then every 24 hours; the first `2xx` resumes everything. You never re-enable anything. After 30 days without a success
+  the callback is removed and you subscribe again. A short outage costs you nothing.
+* **Poll once after an outage** (`list-events`, `list-programs`): notifications skipped while you were failing are not
+  sent later.
+* A probe is a normal notification of your own subscription (`objectType` `SUBSCRIPTION`); answer `2xx` like any other
+  (the development receiver does). Answer **`410 Gone`** to have a callback removed at once.
 
 ## Configuration
 
