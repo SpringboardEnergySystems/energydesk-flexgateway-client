@@ -243,6 +243,10 @@ def test_event_helpers_read_setpoints_reservations_and_the_metering_event():
     metering = obj("EVENT", programID="p", eventName="metering", targets=["PROGRAM:X"])
     assert payloads.metering_event([activation, metering], "p") is metering
     assert payloads.metering_event([activation], "p") is None
+    own = obj("EVENT", programID="system", eventName="metering", targets=["VEN:acme-ven"])
+    assert payloads.metering_event([activation, metering, own]) is own, "no program: your own"
+    assert payloads.metering_event([activation, metering]) is None, "a program's event is not yours"
+    assert payloads.metering_event([own], "p") is None
 
 
 # ── subscriptions ────────────────────────────────────────────────────────

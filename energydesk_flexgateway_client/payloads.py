@@ -85,10 +85,20 @@ def report_request(
     return body
 
 
-def metering_event(events: Iterable[Mapping[str, Any]], program_id: str) -> Mapping[str, Any] | None:
-    """The program's long-running ``metering`` event: the one to report continuous and historical meter data against."""
+def metering_event(events: Iterable[Mapping[str, Any]], program_id: str | None = None) -> Mapping[str, Any] | None:
+    """The long-running ``metering`` event to report continuous and historical meter data against.
+
+    Without ``program_id`` this is **your own**: every ven has one from the day it exists, targeted ``VEN:<venName>``,
+    that needs no program and no enrollment. Readings belong to the resource, not to an event, so what you report there
+    serves every program the resource joins later (nothing to backfill). With ``program_id`` it is that program's.
+    """
     for event in events:
-        if event.get("programID") == program_id and event.get("eventName") == "metering":
+        if event.get("eventName") != "metering":
+            continue
+        if program_id is None:
+            if any(t.startswith("VEN:") for t in event.get("targets") or []):
+                return event
+        elif event.get("programID") == program_id:
             return event
     return None
 

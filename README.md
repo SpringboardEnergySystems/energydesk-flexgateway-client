@@ -28,8 +28,10 @@ Things worth knowing, because they differ from older versions of this API:
 * **Lists are paged** (`skip`, `limit`); the client follows pages for you.
 * **Resource data uses attributes**: `METER_POINT_ID`, `RESOURCE_TYPE`, `LOCATION` (`[longitude, latitude]`),
   `MAX_POWER_CONSUMPTION` / `MAX_POWER_EXPORT` (kW), `DESCRIPTION`. See `examples/transport-sites.json`.
-* **Meter data** goes in a report against the program's `metering` event (payload types `USAGE` in kWh and
-  `DEMAND` in kW).
+* **Meter data** goes in a report against your **own `metering` event** (`VEN:<venName>`, created with your ven) with
+  payload types `USAGE` in kWh and `DEMAND` in kW. It needs no program: report from the day a resource is registered, and
+  what you send once serves every program the resource joins later, with nothing to backfill when it is enrolled. A program
+  you are enrolled in has its own `metering` event too; you do not need it.
 * **Dispatch setpoints are relative to baseline** (`DISPATCH_SETPOINT_RELATIVE`); a negative value is up-regulation.
 
 ## Install
