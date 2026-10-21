@@ -59,6 +59,24 @@ flexgateway-demo send-report --report examples/report-activation.json
 
 `flexgateway-demo --help` lists all commands.
 
+## Meter data and synthetic readings
+
+Report meter data against **your own `metering` event**; no program is needed (see above). Two commands exercise it with
+realistic volume:
+
+```sh
+flexgateway-demo generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
+flexgateway-demo report-readings --dir readings                                          # reports every file
+```
+
+* The files hold `DEMAND` in kW, **positive for consumption, negative for generation** (solar production and battery
+  discharge are negative). The profiles are shaped by the resource's `RESOURCE_TYPE`, and are the same every run for a
+  resource.
+* `report-readings` sends one report per resource and UTC week to your metering event, named so that **running it again
+  replaces the reports instead of adding copies**. In code: `client.report_readings(resource_name, points, payload_type="DEMAND")`.
+* The older commands `create-report`, `submit-report-data` and `get-report-data` are gone: they used endpoints that are
+  not part of OpenADR 3.1.0. `send-report` posts a `reportRequest` and `list-reports` lists yours.
+
 ## Webhooks
 
 Instead of polling you can subscribe to changes. Your callback must be `https` (plain `http` to `localhost` only

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 
@@ -133,3 +133,16 @@ def reservations(event: Mapping[str, Any]) -> list[dict[str, Any]]:
             found.append({"id": item["id"], "start": period.get("start"), "duration": period.get("duration"),
                           "up_kw": values.get("RESERVATION_UP"), "down_kw": values.get("RESERVATION_DOWN")})
     return found
+
+
+def group_by_week(points: Iterable[tuple[datetime, float]]) -> list[tuple[datetime, list[tuple[datetime, float]]]]:
+    """``(interval start, value)`` points grouped by the UTC week (Monday 00:00) they fall in, oldest first: one report each."""
+    groups: list[tuple[datetime, list[tuple[datetime, float]]]] = []
+    for point in sorted(points, key=lambda p: p[0]):
+        moment = point[0].astimezone(timezone.utc)
+        week = (moment - timedelta(days=moment.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        if groups and groups[-1][0] == week:
+            groups[-1][1].append(point)
+        else:
+            groups.append((week, [point]))
+    return groups

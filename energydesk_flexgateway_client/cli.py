@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
 from .client import FlexgatewayApiError, FlexgatewayClient, discover_token_url, fetch_access_token
+from .readings import demand_kw, generate_readings, resource_type_of
 from .webhooks import make_server
 
 DEFAULT_BASE_URL = "http://localhost:8444/openadr3"
@@ -118,6 +120,19 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=9000)
 
+    generate = commands.add_parser(
+        "generate-readings",
+        help="write one JSON file per registered resource with synthetic DEMAND readings (kW; consumption positive)")
+    generate.add_argument("--out-dir", required=True)
+    generate.add_argument("--days", type=int, default=30)
+    generate.add_argument("--interval-minutes", type=int, default=15)
+
+    report_readings = commands.add_parser(
+        "report-readings",
+        help="report every *.json file of generate-readings against your own metering event (no program needed; "
+             "re-running replaces, never duplicates)")
+    report_readings.add_argument("--dir", required=True)
+
     demo = commands.add_parser("demo", help="token, ven, resources (twice, to prove idempotency), programs, events")
     demo.add_argument("--resources", required=True, help="JSON file: a VEN_RESOURCE_REQUEST or an array of them")
     return parser
@@ -193,11 +208,56 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.list_subscriptions())
         elif args.command == "delete-subscription":
             _print_json(client.delete_subscription(args.subscription_id))
+        elif args.command == "generate-readings":
+            _print_json(_generate_readings(client, Path(args.out_dir), args.days, args.interval_minutes))
+        elif args.command == "report-readings":
+            _print_json(_report_readings(client, Path(args.dir)))
         elif args.command == "demo":
             _print_json(_demo(client, _load_objects(args.resources)))
         else:
             raise AssertionError(f"unsupported command: {args.command}")
     return 0
+
+
+def _file_stem(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "-" for c in name) or "resource"
+
+
+def _generate_readings(client: FlexgatewayClient, out_dir: Path, days: int, interval_minutes: int) -> dict[str, Any]:
+    """One file per registered resource: its ``resourceName`` and ``DEMAND`` readings in kW, consumption positive."""
+    resources = client.list_resources()
+    if not resources:
+        raise RuntimeError("no resources registered for this VEN: register some first (demo, or register-resources)")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for resource in resources:
+        kind = resource_type_of(resource)
+        points = [{"interval_start": p["interval_start"], "value": demand_kw(kind, p["value"])}
+                  for p in generate_readings(resource, days=days, interval_minutes=interval_minutes)]
+        path = out_dir / f"{_file_stem(resource['resourceName'])}.json"
+        path.write_text(json.dumps({
+            "resourceName": resource["resourceName"], "resourceType": kind, "payloadType": "DEMAND",
+            "intervalMinutes": interval_minutes, "dataPoints": points}, indent=2), encoding="utf-8")
+        written.append({"file": str(path), "resourceName": resource["resourceName"], "points": len(points)})
+    return {"status": "ok", "files_written": len(written), "files": written}
+
+
+def _report_readings(client: FlexgatewayClient, in_dir: Path) -> dict[str, Any]:
+    files = sorted(in_dir.glob("*.json"))
+    if not files:
+        raise RuntimeError(f"no .json files found in {in_dir}")
+    results = []
+    for path in files:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        name, points = payload.get("resourceName"), payload.get("dataPoints")
+        if not name or not points:
+            raise ValueError(f"{path}: missing resourceName or dataPoints")
+        reports = client.report_readings(
+            name, [(datetime.fromisoformat(p["interval_start"].replace("Z", "+00:00")), p["value"]) for p in points],
+            payload_type=payload.get("payloadType", "DEMAND"), interval_minutes=payload.get("intervalMinutes", 15))
+        results.append({"file": str(path), "resourceName": name, "points": len(points), "reports": len(reports)})
+    return {"status": "ok", "files_reported": len(results), "total_points": sum(r["points"] for r in results),
+            "total_reports": sum(r["reports"] for r in results), "results": results}
 
 
 def main() -> int:

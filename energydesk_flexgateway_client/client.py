@@ -14,9 +14,12 @@ Nothing here logs or prints a token or a client secret.
 
 from __future__ import annotations
 
-from typing import Any, Iterator, Mapping
+from datetime import datetime
+from typing import Any, Iterable, Iterator, Mapping
 
 import httpx
+
+from . import payloads
 
 PAGE_SIZE = 50  # the specification's maximum for ``limit``
 
@@ -232,6 +235,37 @@ class FlexgatewayClient:
 
     def get_report(self, report_id: str) -> dict[str, Any]:
         return self._request("GET", f"reports/{report_id}")
+
+    def report_readings(
+        self,
+        resource_name: str,
+        points: Iterable[tuple[datetime, float]],
+        *,
+        payload_type: str = "DEMAND",
+        interval_minutes: int = 15,
+    ) -> list[dict[str, Any]]:
+        """Report interval readings for one resource against **your own metering event**, no program needed.
+
+        ``points`` are ``(interval start, value)``; ``DEMAND`` is kW (positive consumption, negative generation) and
+        ``USAGE`` is kWh over the interval. Readings are sent as one report per resource, payload type and UTC week,
+        named so that sending the same data again **replaces** the report instead of adding a copy: the call is
+        idempotent. What you report here serves every program the resource joins later; nothing to backfill.
+        """
+        event = payloads.metering_event(self.list_events())
+        if event is None:
+            raise ValueError("this ven has no metering event yet: the VTN creates one with the ven, so it needs a restart "
+                             "or an upgrade")
+        existing = {r["reportName"]: r["id"] for r in self.list_reports(event_id=event["id"]) if r.get("reportName")}
+        duration = f"PT{interval_minutes // 60}H" if interval_minutes % 60 == 0 else f"PT{interval_minutes}M"
+        sent: list[dict[str, Any]] = []
+        for week, group in payloads.group_by_week(points):
+            name = f"readings-{resource_name}-{payload_type.lower()}-{week:%Y-%m-%d}"
+            body = payloads.report_request(
+                event["id"], self.ven_name or "flexgateway-demo", resource_name,
+                (payloads.interval(i, start, duration, {payload_type: value}) for i, (start, value) in enumerate(group)),
+                report_name=name)
+            sent.append(self.update_report(existing[name], body) if name in existing else self.create_report(body))
+        return sent
 
     # ── subscriptions (webhooks) ─────────────────────────────────────────
 

@@ -6,7 +6,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 import httpx
@@ -94,7 +94,11 @@ class FakeVtn:
                 created = obj("REPORT", clientID=self.client_id, **body)
                 self.reports[created["id"]] = created
                 return 201, created
-            return 200, self.page(list(self.reports.values()), query)
+            if method == "PUT":
+                self.reports[parts[1]] = {**self.reports[parts[1]], **body}
+                return 200, self.reports[parts[1]]
+            items = [r for r in self.reports.values() if query.get("eventID") in (None, r["eventID"])]
+            return 200, self.page(items, query)
         if parts[0] == "subscriptions":
             if method == "POST":
                 created = obj("SUBSCRIPTION", clientID=self.client_id, **body)
@@ -348,3 +352,123 @@ def test_the_cli_reads_the_token_from_the_environment_and_discovers_the_token_ur
     assert cli._access_token(args) == "tok"
     assert seen == {"base": "https://vtn.example/openadr3", "url": "https://vtn.example/openadr3/auth/token",
                     "cid": "cid", "secret": "secret-from-env"}
+
+
+# ── synthetic readings, reported to your own metering event ──────────────
+
+from energydesk_flexgateway_client.readings import demand_kw, generate_readings, resource_type_of  # noqa: E402
+
+OWN_EVENT = obj("EVENT", programID="system-metering", eventName="metering", targets=["VEN:acme-ven"],
+                intervalPeriod={"start": "2026-01-01T00:00:00Z", "duration": "P9999Y"},
+                reportDescriptors=[{"payloadType": "DEMAND", "units": "KW", "historical": True, "numIntervals": -1}])
+HOURS = [(datetime(2026, 10, 18, 22, tzinfo=timezone.utc) + timedelta(hours=i), float(i)) for i in range(6)]  # spans two weeks
+
+
+def test_the_generator_covers_the_period_with_no_gaps_and_solar_is_zero_at_night():
+    end = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    points = generate_readings({"id": "r1", "attributes": [{"type": "RESOURCE_TYPE", "values": ["solar"]}]},
+                               days=2, interval_minutes=15, end=end)
+    assert len(points) == 2 * 24 * 4
+    assert points[0]["interval_start"] == "2026-09-29T12:00:00Z" and points[-1]["interval_start"] == "2026-10-01T11:45:00Z"
+    assert all(isinstance(p["value"], float) for p in points) and any(p["value"] == 0.0 for p in points)
+
+
+def test_the_generator_is_deterministic_per_resource_and_reads_the_3_1_0_type():
+    resource = {"id": "r1", "attributes": [{"type": "RESOURCE_TYPE", "values": ["battery"]}]}
+    assert generate_readings(resource, days=1, interval_minutes=60) == generate_readings(resource, days=1, interval_minutes=60)
+    assert resource_type_of(resource) == "battery" and resource_type_of({"resource_type": "Solar"}) == "solar"
+    assert resource_type_of({}) == ""
+
+
+def test_demand_is_positive_for_consumption_and_negative_for_generation():
+    assert demand_kw("ev_charger", 7.0) == 7.0 and demand_kw("heat_pump", 1.5) == 1.5
+    assert demand_kw("solar", 4.2) == -4.2, "production is generation"
+    assert demand_kw("battery", 3.0) == -3.0 and demand_kw("battery", -3.0) == 3.0, "discharging generates, charging consumes"
+
+
+def test_readings_group_into_one_report_per_week():
+    groups = payloads.group_by_week(reversed(HOURS))
+    assert [(w.date().isoformat(), [v for _, v in pts]) for w, pts in groups] == [
+        ("2026-10-12", [0.0, 1.0]), ("2026-10-19", [2.0, 3.0, 4.0, 5.0])]
+
+
+def test_readings_go_to_your_own_metering_event_one_report_per_week_and_a_resend_replaces():
+    vtn, client = setup(events=[OWN_EVENT])
+    client.ensure_ven()
+    first = client.report_readings("site-1", HOURS, interval_minutes=60)
+    assert [r["reportName"] for r in first] == ["readings-site-1-demand-2026-10-12", "readings-site-1-demand-2026-10-19"]
+    assert {r["eventID"] for r in first} == {OWN_EVENT["id"]}
+    assert [len(r["resources"][0]["intervals"]) for r in first] == [2, 4]
+    assert first[0]["resources"][0]["intervals"][0]["intervalPeriod"] == {"start": "2026-10-18T22:00:00Z", "duration": "PT1H"}
+    posts = [r for r in vtn.requests if r.method == "POST" and r.url.path.endswith("/reports")]
+    again = client.report_readings("site-1", HOURS, interval_minutes=60)
+    assert len(vtn.reports) == 2, "the same data again replaced the reports, it did not add copies"
+    assert len([r for r in vtn.requests if r.method == "POST" and r.url.path.endswith("/reports")]) == len(posts)
+    assert [r["id"] for r in again] == [r["id"] for r in first]
+
+
+def test_usage_in_kwh_can_be_reported_the_same_way():
+    vtn, client = setup(events=[OWN_EVENT])
+    client.ensure_ven()
+    (report,) = client.report_readings("site-1", HOURS[:2], payload_type="USAGE", interval_minutes=60)
+    assert report["reportName"] == "readings-site-1-usage-2026-10-12"
+    assert report["resources"][0]["intervals"][0]["payloads"] == [{"type": "USAGE", "values": [0.0]}]
+
+
+def test_without_a_metering_event_it_says_what_is_missing_instead_of_guessing():
+    vtn, client = setup(events=[obj("EVENT", programID="p", eventName="metering", targets=["PROGRAM:X"])])
+    client.ensure_ven()
+    with pytest.raises(ValueError, match="no metering event yet"):
+        client.report_readings("site-1", HOURS)
+    assert vtn.reports == {}, "a program's event is not yours and is not used"
+
+
+def test_generate_then_report_a_month_for_every_registered_resource(tmp_path):
+    vtn, client = setup(events=[OWN_EVENT])
+    for name, kind in (("site-1", "solar"), ("charger-1", "ev_charger")):
+        client.register_resource(payloads.resource_request(name, resource_type=kind, meter_point_id="1" + name[-1] * 5))
+    out = tmp_path / "readings"
+    generated = cli._generate_readings(client, out, days=30, interval_minutes=60)
+    assert generated["files_written"] == 2 and sorted(p.name for p in out.glob("*.json")) == ["charger-1.json", "site-1.json"]
+    solar = json.loads((out / "site-1.json").read_text())
+    assert (solar["resourceName"], solar["payloadType"], solar["intervalMinutes"]) == ("site-1", "DEMAND", 60)
+    assert len(solar["dataPoints"]) == 30 * 24 and max(p["value"] for p in solar["dataPoints"]) <= 0, "solar generates: negative"
+    assert min(p["value"] for p in json.loads((out / "charger-1.json").read_text())["dataPoints"]) >= 0
+
+    reported = cli._report_readings(client, out)
+    assert (reported["files_reported"], reported["total_points"]) == (2, 2 * 30 * 24)
+    assert reported["total_reports"] == len(vtn.reports) and 10 <= len(vtn.reports) <= 12   # about 5 weeks each
+    assert {r["eventID"] for r in vtn.reports.values()} == {OWN_EVENT["id"]}
+    cli._report_readings(client, out)
+    assert len(vtn.reports) == reported["total_reports"], "running it again replaces: nothing piles up"
+
+
+def test_the_commands_fail_clearly_when_there_is_nothing_to_do(tmp_path):
+    vtn, client = setup(events=[OWN_EVENT])
+    client.ensure_ven()
+    with pytest.raises(RuntimeError, match="no resources registered"):
+        cli._generate_readings(client, tmp_path / "x", 1, 60)
+    with pytest.raises(RuntimeError, match="no .json files"):
+        cli._report_readings(client, tmp_path)
+    (tmp_path / "bad.json").write_text('{"resourceName": "x"}')
+    with pytest.raises(ValueError, match="missing resourceName or dataPoints"):
+        cli._report_readings(client, tmp_path)
+
+
+def test_the_cli_runs_generate_and_report(monkeypatch, tmp_path, capsys):
+    vtn, client = setup(events=[OWN_EVENT])
+    client.register_resource(payloads.resource_request("site-1", resource_type="solar"))
+    class Shared:                       # cli.run uses the client as a context manager and would close ours
+        def __enter__(self):
+            return client
+
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(cli, "FlexgatewayClient", lambda *a, **k: Shared())
+    out = tmp_path / "r"
+    assert cli.run(cli._parser().parse_args(["--access-token", "t", "generate-readings", "--out-dir", str(out),
+                                             "--days", "2", "--interval-minutes", "60"])) == 0
+    assert json.loads(capsys.readouterr().out)["files_written"] == 1
+    assert cli.run(cli._parser().parse_args(["--access-token", "t", "report-readings", "--dir", str(out)])) == 0
+    assert json.loads(capsys.readouterr().out)["total_points"] == 48
