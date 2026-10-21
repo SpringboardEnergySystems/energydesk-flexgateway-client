@@ -66,6 +66,7 @@ realistic volume:
 
 ```sh
 flexgateway-demo generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
+# only invent data for some of them: --name-prefix sim-   (never for real resources)
 flexgateway-demo report-readings --dir readings                                          # reports every file
 ```
 

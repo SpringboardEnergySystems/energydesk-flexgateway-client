@@ -126,6 +126,8 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--out-dir", required=True)
     generate.add_argument("--days", type=int, default=30)
     generate.add_argument("--interval-minutes", type=int, default=15)
+    generate.add_argument("--name-prefix", default="",
+                          help="only resources whose resourceName starts with this (e.g. sim-): never invent data for real ones")
 
     report_readings = commands.add_parser(
         "report-readings",
@@ -209,7 +211,7 @@ def run(args: argparse.Namespace) -> int:
         elif args.command == "delete-subscription":
             _print_json(client.delete_subscription(args.subscription_id))
         elif args.command == "generate-readings":
-            _print_json(_generate_readings(client, Path(args.out_dir), args.days, args.interval_minutes))
+            _print_json(_generate_readings(client, Path(args.out_dir), args.days, args.interval_minutes, args.name_prefix))
         elif args.command == "report-readings":
             _print_json(_report_readings(client, Path(args.dir)))
         elif args.command == "demo":
@@ -223,11 +225,15 @@ def _file_stem(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name) or "resource"
 
 
-def _generate_readings(client: FlexgatewayClient, out_dir: Path, days: int, interval_minutes: int) -> dict[str, Any]:
-    """One file per registered resource: its ``resourceName`` and ``DEMAND`` readings in kW, consumption positive."""
-    resources = client.list_resources()
+def _generate_readings(
+    client: FlexgatewayClient, out_dir: Path, days: int, interval_minutes: int, name_prefix: str = "",
+) -> dict[str, Any]:
+    """One file per registered resource (only those whose name starts with ``name_prefix``): its ``resourceName`` and
+    ``DEMAND`` readings in kW, consumption positive."""
+    resources = [r for r in client.list_resources() if r["resourceName"].startswith(name_prefix)]
     if not resources:
-        raise RuntimeError("no resources registered for this VEN: register some first (demo, or register-resources)")
+        raise RuntimeError(f"no resources{f' starting with {name_prefix!r}' if name_prefix else ''} registered for this VEN: "
+                           "register some first (demo, or register-resources)")
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for resource in resources:

@@ -472,3 +472,15 @@ def test_the_cli_runs_generate_and_report(monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["files_written"] == 1
     assert cli.run(cli._parser().parse_args(["--access-token", "t", "report-readings", "--dir", str(out)])) == 0
     assert json.loads(capsys.readouterr().out)["total_points"] == 48
+
+
+def test_the_name_prefix_keeps_invented_data_away_from_real_resources(tmp_path):
+    vtn, client = setup(events=[OWN_EVENT])
+    for name, kind in (("sim-NO1-0001", "battery"), ("sim-NO1-0002", "solar"), ("GROWATT001", "solar"), ("EKEBREG_AMS_001", "main_meter")):
+        client.register_resource(payloads.resource_request(name, resource_type=kind))
+    out = tmp_path / "r"
+    result = cli._generate_readings(client, out, days=1, interval_minutes=60, name_prefix="sim-")
+    assert result["files_written"] == 2 and sorted(p.name for p in out.glob("*.json")) == ["sim-NO1-0001.json", "sim-NO1-0002.json"]
+    assert cli._generate_readings(client, tmp_path / "all", days=1, interval_minutes=60)["files_written"] == 4, "no prefix: all"
+    with pytest.raises(RuntimeError, match="starting with 'nope-'"):
+        cli._generate_readings(client, tmp_path / "none", days=1, interval_minutes=60, name_prefix="nope-")
