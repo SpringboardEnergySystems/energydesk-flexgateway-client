@@ -1,9 +1,12 @@
 """Synthetic meter-reading generation, for exercising report ingestion.
 
 Not aggregated: one data point per interval, shaped loosely like the
-resource's resource_type (ev_charger / solar / battery), with enough
-day-to-day and intra-day variation to look like real site data rather
-than a flat line.
+resource's type (ev_charger / solar / battery), with enough day-to-day and
+intra-day variation to look like real site data rather than a flat line.
+
+``generate_readings`` yields the physical profile of the resource. ``demand_kw`` turns a value into what is reported:
+``DEMAND`` in kW, where **positive is consumption and negative is generation**, so a solar plant's production and a
+battery's discharge are negative.
 """
 
 from __future__ import annotations
@@ -15,6 +18,21 @@ from typing import Any, Callable
 
 Point = dict[str, Any]
 ProfileFn = Callable[[float, random.Random, float], float]
+
+
+def resource_type_of(resource: dict[str, Any]) -> str:
+    """The resource's type: the ``RESOURCE_TYPE`` attribute of a 3.1.0 resource (an old-style ``resource_type`` field
+    is still understood)."""
+    for attribute in resource.get("attributes") or []:
+        if attribute.get("type") == "RESOURCE_TYPE" and attribute.get("values"):
+            return str(attribute["values"][0]).lower()
+    return (resource.get("resource_type") or "").lower()
+
+
+def demand_kw(resource_type: str, value: float) -> float:
+    """A profile value as ``DEMAND`` in kW (positive = consumption). Solar produces and the battery profile is
+    positive when discharging, so both are generation (negative demand); everything else consumes."""
+    return round(-value if resource_type in ("solar", "battery") else value, 3)
 
 
 def _round_down(moment: datetime, interval: timedelta) -> datetime:
@@ -77,9 +95,9 @@ def generate_readings(
     end = _round_down(end or datetime.now(timezone.utc), interval)
     start = end - timedelta(days=days)
 
-    resource_type = (resource.get("resource_type") or "").lower()
+    resource_type = resource_type_of(resource)
     profile = _PROFILES.get(resource_type, _default_profile)
-    seed = resource.get("id") or resource.get("external_resource_id") or resource_type
+    seed = resource.get("id") or resource.get("resourceName") or resource.get("external_resource_id") or resource_type
     rng = random.Random(seed)
 
     points: list[Point] = []

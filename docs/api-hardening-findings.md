@@ -1,5 +1,8 @@
 # API hardening findings
 
+> **Historical.** This review was written against the earlier OpenADR 3.0 implementation. The server and this
+> client now implement OpenADR 3.1.0; several findings below no longer apply or have been resolved by the rewrite.
+
 This is a client-driven review of the partner-facing OpenADR API. “Addressed” means
 the change exists in the current local Flexgateway service working tree; it does
 not mean it has been committed or deployed.

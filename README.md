@@ -1,36 +1,38 @@
-# EnergyDesk Flexgateway demo client
+# EnergyDesk Flexgateway reference client (OpenADR 3.1.0)
 
-This repository is an executable partner-integration example for the EnergyDesk
-Flexgateway OpenADR 3 API. It also acts as a small external contract test: if the
-demo stops working, either the client or the published API contract has changed.
+An executable example of how a partner integrates with the EnergyDesk Flexgateway
+VTN, which implements OpenADR 3.1.0. It is also a small external contract test:
+if the demo stops working, either this client or the published API has changed.
 
-The first supported journey is intentionally small:
+The client never logs or prints access tokens, client secrets or webhook bearer tokens.
 
-1. obtain an OAuth 2 access token;
-2. verify which pre-provisioned VEN the credential belongs to;
-3. register one or more independently controllable resources;
-4. repeat every resource registration to verify idempotency;
-5. list the resources visible to that partner identity.
+## How the integration works
 
-The client never logs or prints access tokens or client secrets.
+| Step | What you do | Endpoint |
+| --- | --- | --- |
+| 1 | Find where to get a token | `GET /auth/server` (no authentication) |
+| 2 | Get a token with the OAuth client credentials Springboard issued you | `POST /auth/token` |
+| 3 | Make sure your `ven` exists (created once, by you or by Springboard) | `GET/POST /vens` |
+| 4 | Register your independently controllable resources (idempotent) | `GET/POST/PUT /resources` |
+| 5 | Springboard approves each resource and enrolls it in a program | done by the operator, not by you |
+| 6 | Read your programs and events | `GET /programs`, `GET /events` |
+| 7 | Report what happened, and meter readings | `POST /reports` |
+| 8 | Optionally be notified instead of polling | `POST /subscriptions` |
 
-## Repository layout
+Things worth knowing, because they differ from older versions of this API:
 
-Run installation, tests, and demo commands from the repository root. There is no
-need to move into the Python package directory.
-
-```text
-energydesk-flexgateway-client/
-├── energydesk_flexgateway_client/  # importable Python package
-├── examples/                       # sample API payloads
-├── tests/
-├── .env                            # local secrets; ignored by Git
-├── requirements.txt
-├── requirements-dev.txt
-└── setup.py
-```
-
-Keep `.env` at this top level, beside `setup.py` and `requirements.txt`.
+* **Enrollment is done by the operator.** You see a program only after your resource is enrolled in it.
+* **You see only your own objects.** Visibility follows your OAuth client and the targets granted to you
+  (`PROGRAM:<name>`, `VEN:<name>`, `RESOURCE:<id>`). Targets you put on your own objects are ignored.
+* **Wire format is camelCase and errors are RFC 7807** (`application/json` bodies with `title`/`detail`).
+* **Lists are paged** (`skip`, `limit`); the client follows pages for you.
+* **Resource data uses attributes**: `METER_POINT_ID`, `RESOURCE_TYPE`, `LOCATION` (`[longitude, latitude]`),
+  `MAX_POWER_CONSUMPTION` / `MAX_POWER_EXPORT` (kW), `DESCRIPTION`. See `examples/transport-sites.json`.
+* **Meter data** goes in a report against your **own `metering` event** (`VEN:<venName>`, created with your ven) with
+  payload types `USAGE` in kWh and `DEMAND` in kW. It needs no program: report from the day a resource is registered, and
+  what you send once serves every program the resource joins later, with nothing to backfill when it is enrolled. A program
+  you are enrolled in has its own `metering` event too; you do not need it.
+* **Dispatch setpoints are relative to baseline** (`DISPATCH_SETPOINT_RELATIVE`); a negative value is up-regulation.
 
 ## Install
 
@@ -39,199 +41,81 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 python -m pip install -e .
-cp .env.example .env
+cp .env.example .env     # then fill in your credentials
 ```
 
-The CLI automatically loads the root `.env` when run from this directory. Normal
-environment variables and command-line options take precedence.
+The CLI loads `.env` from the directory you run it in. Variables already set in the environment win over `.env`,
+so a stale `.env` never overrides what you export.
 
-## Run against a local Flexgateway
-
-Migrate both service databases before starting Flexgateway:
+## Run
 
 ```sh
-cd ../energydesk-flexgateway-service
-sh scripts/migrate_openadr.sh upgrade head
-sh scripts/migrate_gateway.sh upgrade head
-APP_PORT=8444 python -m main
+flexgateway-demo discover
+flexgateway-demo demo --resources examples/transport-sites.json   # ven + resources, registered twice
+flexgateway-demo list-programs
+flexgateway-demo list-events --active
+flexgateway-demo send-report --report examples/report-activation.json
 ```
 
-`OPENADR_DEV_AUTH_BYPASS` is deliberately opt-in and must never be enabled in a
-shared or deployed environment.
+`flexgateway-demo --help` lists all commands.
 
-In another shell:
+## Meter data and synthetic readings
+
+Report meter data against **your own `metering` event**; no program is needed (see above). Two commands exercise it with
+realistic volume:
 
 ```sh
-cd ~/PycharmProjects/energydesk-flexgateway-client
-python -m energydesk_flexgateway_client.cli demo \
-  --resources ./examples/transport-sites.json
+flexgateway-demo generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
+flexgateway-demo report-readings --dir readings                                          # reports every file
 ```
 
-Before running the demo, use the Flexgateway operator portal to create the VEN,
-assign a VenAdmin user, and create an API client for that VEN. Put the resulting
-client credentials and the appserver token URL in the client repository's `.env`.
+* The files hold `DEMAND` in kW, **positive for consumption, negative for generation** (solar production and battery
+  discharge are negative). The profiles are shaped by the resource's `RESOURCE_TYPE`, and are the same every run for a
+  resource.
+* `report-readings` sends one report per resource and UTC week to your metering event, named so that **running it again
+  replaces the reports instead of adding copies**. In code: `client.report_readings(resource_name, points, payload_type="DEMAND")`.
+* The older commands `create-report`, `submit-report-data` and `get-report-data` are gone: they used endpoints that are
+  not part of OpenADR 3.1.0. `send-report` posts a `reportRequest` and `list-reports` lists yours.
 
-## Run with OAuth client credentials
+## Webhooks
 
-Do not store real credentials in Git. Set them in the environment:
+Instead of polling you can subscribe to changes. Your callback must be `https` (plain `http` to `localhost` only
+if the server runs with `VTN_WEBHOOK_ALLOW_LOCALHOST`, which is for development).
 
 ```sh
-export FLEXGATEWAY_BASE_URL=https://springboard-test.energydesk.no/flexibility/openadr3
-export OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL=https://your-oauth-host.example/o/token/
-export OAUTH_CLIENT_ID=provided-by-springboard
-export OAUTH_CLIENT_SECRET=provided-out-of-band
-export OAUTH_SCOPE='read write'
-
-flexgateway-demo demo --resources examples/transport-sites.json
+export WEBHOOK_BEARER_TOKEN=<a secret of your own choosing>
+flexgateway-demo serve-webhooks --port 9301                       # development receiver
+flexgateway-demo subscribe --callback-url http://127.0.0.1:9301 --objects EVENT --operations CREATE,UPDATE
 ```
 
-The token request uses the OAuth 2 `client_credentials` grant and HTTP Basic client
-authentication. A ready bearer token can instead be supplied through
-`FLEXGATEWAY_ACCESS_TOKEN` or `--access-token`.
+* **`WEBHOOK_BEARER_TOKEN` is yours.** You choose it, you send it when subscribing, and the VTN sends it back to
+  you in the `Authorization: Bearer` header of every notification. Your receiver must check it
+  (`energydesk_flexgateway_client.webhooks` does, in constant time). It is not related to your OAuth credentials.
+* The VTN stores it encrypted. The key for that (`SUBSCRIPTION_TOKEN_KEY`) belongs to the **server operator**;
+  you never need it.
+* You are notified only of changes made after you subscribed, and only for objects you are allowed to see.
+* Delivery is retried with backoff for about 13 minutes and then given up on, so treat webhooks as a hint and keep a
+  periodic poll as the source of truth.
+* **If your receiver stops answering, the VTN backs off and comes back by itself.** After a lasting run of failures it
+  sends only one notification per 15 minutes; after 48 hours without a success it stops and probes you at 1, 3, 6, 12,
+  then every 24 hours; the first `2xx` resumes everything. You never re-enable anything. After 30 days without a success
+  the callback is removed and you subscribe again. A short outage costs you nothing.
+* **Poll once after an outage** (`list-events`, `list-programs`): notifications skipped while you were failing are not
+  sent later.
+* A probe is a normal notification of your own subscription (`objectType` `SUBSCRIPTION`); answer `2xx` like any other
+  (the development receiver does). Answer **`410 Gone`** to have a callback removed at once.
 
-### Troubleshooting `401 Invalid authentication credentials`
+## Configuration
 
-If the token endpoint succeeds but Flexgateway returns `401`, the client has
-already acquired and sent a bearer token. Check the Flexgateway **service**
-configuration, not the client configuration:
-
-```dotenv
-OAUTH_SERVER_URL=http://127.0.0.1:8001
-OAUTH_INTROSPECT_ENDPOINT=/o/introspect/
-OAUTH_INTROSPECTION_CLIENT_ID=<flexgateway-validator-client-id>
-OAUTH_INTROSPECTION_CLIENT_SECRET=<flexgateway-validator-client-secret>
-```
-
-The validator credentials must identify a confidential `client_credentials`
-application owned by a platform administrator in the same Django instance that
-issued the partner token. Flexgateway exchanges these credentials for a short-lived
-token carrying the reserved `introspection` scope; VEN-owned partner applications
-cannot request that scope. Keep only one definition of each variable in the service
-`.env`, and restart both services after changing OAuth settings.
-
-The partner credentials in this repository and the validator credentials in the
-service should be separate in a shared environment. A Google/OIDC portal session
-is also separate and does not authenticate command-line API requests.
-
-## Run the six-resource local example
-
-Run these commands from the `energydesk-flexgateway-client` repository root. The
-root `.env` should contain the VEN-bound OAuth client credentials and these local
-URLs:
-
-```dotenv
-FLEXGATEWAY_BASE_URL=http://localhost:8444/openadr3
-OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL=http://localhost:8001/o/token/
-OAUTH_CLIENT_ID=<VEN API client ID>
-OAUTH_CLIENT_SECRET=<VEN API client secret>
-```
-
-First confirm which VEN is assigned to the OAuth client:
-
-```sh
-python -m energydesk_flexgateway_client.cli list-vens
-```
-
-Register the six resources once. Although the option is named `--resource`, it
-accepts both a single JSON object and the array in `transport-sites.json`:
-
-```sh
-python -m energydesk_flexgateway_client.cli register-resource \
-  --resource ./examples/transport-sites.json
-```
-
-List all resources visible to this VEN:
-
-```sh
-python -m energydesk_flexgateway_client.cli list-resources
-```
-
-Run the complete smoke test instead when you want to register all six resources,
-repeat every registration to verify idempotency, and confirm that all six appear
-in the list response:
-
-```sh
-python -m energydesk_flexgateway_client.cli demo \
-  --resources ./examples/transport-sites.json
-```
-
-Registration is an upsert keyed by the VEN and `external_resource_id`, so running
-either registration command again updates the same six resources rather than
-creating duplicates.
-
-## Other commands
-
-```sh
-python -m energydesk_flexgateway_client.cli get-resource RESOURCE_UUID
-```
-
-If the package was installed with `python -m pip install -e .`, the shorter
-`flexgateway-demo` executable is equivalent. For example:
-
-```sh
-flexgateway-demo demo --resources ./examples/transport-sites.json
-```
-
-All commands accept `--base-url` and `--access-token`. Command-line values override
-environment values.
-
-## Resource payload
-
-Do not put a VEN ID or a Flexgateway resource UUID in the request. VEN ownership is
-derived exclusively from the bearer token's provisioned OAuth-client assignment,
-and Flexgateway creates the resource UUID. An unassigned OAuth client is rejected.
-
-`external_resource_id` is the partner's durable identifier. Repeating a request
-with the same bearer identity and `external_resource_id` must return the same
-Flexgateway resource ID.
-
-### Resource granularity and types
-
-Register each independently measured or controllable unit as its own resource.
-For example, a charging site containing an EV load, a battery and solar panels is
-three resources sharing one `service_location.meterpoint_id`; it is not one
-`solar+battery` resource. A partner may optimize those units together without
-combining their registration identities.
-
-The API uses the EnergyDesk Python SDK's authoritative `ResourceType` taxonomy:
-
-- `battery`, `solar`, and `main_meter` for dedicated-worker device types;
-- `ev_charger`, `heat_pump`, `hvac`, `wind`, `generator`, and `load` for generic
-  configurable assets;
-- `other` as the explicit fallback for a device that cannot yet be classified.
-
-The value also serves as the IoT/InfluxDB measurement name. Flexgateway rejects
-arbitrary top-level resource types with HTTP `422`; clients should send `other`
-when none of the defined categories applies. More detailed model or technology
-information can still be supplied as attributes.
-
-The six-resource [transport-sites.json](examples/transport-sites.json) manifest
-models two synthetic transport charging sites. Each site has three distinct
-resources sharing its meterpoint: `ev_charger`, `battery`, and `solar`.
-
-## Expected security behavior
-
-- Every API call uses `Authorization: Bearer …`.
-- VEN responses never contain a stored bearer token.
-- `GET /vens` returns only the caller's VEN.
-- Resource list and detail operations return only resources owned by the caller's
-  VEN.
-- A resource owned by another partner should appear as `404`, avoiding disclosure
-  of whether the identifier exists.
-- Invalid or expired tokens return `401`.
-
-These behaviors should be covered by service-side authorization tests before the
-shared test environment is handed to a partner.
-
-The findings discovered while building this client, including unresolved release
-blockers, are tracked in [docs/api-hardening-findings.md](docs/api-hardening-findings.md).
+See `.env.example`. You need `FLEXGATEWAY_BASE_URL`, and either `FLEXGATEWAY_ACCESS_TOKEN` or
+`OAUTH_CLIENT_ID` + `OAUTH_CLIENT_SECRET`. The token URL is discovered from `/auth/server`;
+`OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL` overrides it.
 
 ## Tests
-
-The tests use an in-memory HTTP transport and never call a deployed service:
 
 ```sh
 python -m pytest
 ```
 
-The `demo` command is the external smoke test for a running environment.
+The tests run the client against an in-process fake VTN whose requests and responses are validated against the
+OpenADR 3.1.0 specification (`tests/spec/`, see the README there for provenance and the documented patches).

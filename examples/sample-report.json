@@ -1,7 +1,0 @@
-{
-  "report_name": "Transport Site Bergen - EV charging load usage",
-  "resource_id": "REPLACE_WITH_A_REAL_RESOURCE_ID",
-  "report_type": "usage",
-  "reading_type": "energy",
-  "interval_period": "PT15M"
-}
