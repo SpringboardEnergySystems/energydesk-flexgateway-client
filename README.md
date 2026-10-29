@@ -14,14 +14,15 @@ The client never logs or prints access tokens, client secrets or webhook bearer 
 | 2 | Get a token with the OAuth client credentials Springboard issued you | `POST /auth/token` |
 | 3 | Make sure your `ven` exists (created once, by you or by Springboard) | `GET/POST /vens` |
 | 4 | Register your independently controllable resources (idempotent) | `GET/POST/PUT /resources` |
-| 5 | Springboard approves each resource and enrolls it in a program | done by the operator, not by you |
+| 5 | Springboard approves each resource and opens programs; you enroll your approved resources | `POST /api/vtn/programs/{id}/resources` (see "Enroll resources in a program") |
 | 6 | Read your programs and events | `GET /programs`, `GET /events` |
 | 7 | Report what happened, and meter readings | `POST /reports` |
 | 8 | Optionally be notified instead of polling | `POST /subscriptions` |
 
 Things worth knowing, because they differ from older versions of this API:
 
-* **Enrollment is done by the operator.** You see a program only after your resource is enrolled in it.
+* **Springboard publishes programs; you enroll.** You see the programs Springboard has opened for enrollment (and the ones your
+  resources are in). Springboard approves your resources first; then you enroll them yourself, see "Enroll resources in a program".
 * **You see only your own objects.** Visibility follows your OAuth client and the targets granted to you
   (`PROGRAM:<name>`, `VEN:<name>`, `RESOURCE:<id>`). Targets you put on your own objects are ignored.
 * **Wire format is camelCase and errors are RFC 7807** (`application/json` bodies with `title`/`detail`).
@@ -59,6 +60,26 @@ flexgateway-demo send-report --report examples/report-activation.json
 
 `flexgateway-demo --help` lists all commands.
 
+## Enroll resources in a program
+
+Springboard decides which programs exist and opens them for enrollment, and approves your resources. You decide which of
+your **approved** resources take part, with your own VEN credentials (no extra login):
+
+```sh
+flexgateway-demo list-programs                        # the programs open for enrollment, and the ones you are already in
+flexgateway-demo find-program "Longflex Arm"          # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
+flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim- --dry-run
+flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim-     # or --resource NAME (repeatable) or --all
+flexgateway-demo unenroll --program "Longflex Arm" --name-prefix sim-   # withdraw again
+```
+
+`enroll` and `unenroll` work on the resources of `--ven-name` (`FLEXGATEWAY_VEN_NAME`), print one line per resource
+(`enrolled`, `already enrolled`, `withdrawn`, or `would enroll` / `would withdraw` with `--dry-run`) and are safe to re-run.
+The server decides, and the client shows its reason: `403` the resource is not approved by Springboard yet, `404` the program
+is not open to you (or the resource is not yours), `409` already enrolled, the enrollment window is closed, or Springboard has
+put the resource in a portfolio (it may be part of a bid: Springboard has to release it). A program that is not listed is
+not open yet. `FLEXGATEWAY_VTN_API_URL` overrides the derived `<host>/api/vtn`.
+
 ## Meter data and synthetic readings
 
 Report meter data against **your own `metering` event**; no program is needed (see above). Two commands exercise it with
@@ -66,6 +87,7 @@ realistic volume:
 
 ```sh
 flexgateway-demo generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
+# only invent data for some of them: --name-prefix sim-   (never for real resources)
 flexgateway-demo report-readings --dir readings                                          # reports every file
 ```
 

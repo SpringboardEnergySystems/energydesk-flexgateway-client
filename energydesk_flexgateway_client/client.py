@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterable, Iterator, Mapping
 
+import re
+
 import httpx
 
 from . import payloads
@@ -104,11 +106,15 @@ class FlexgatewayClient:
         ven_name: str | None = None,
         timeout: float = 15.0,
         transport: httpx.BaseTransport | None = None,
+        vtn_api_url: str | None = None,
     ) -> None:
         if not access_token:
             raise ValueError("access_token must not be empty")
         self.ven_name = ven_name
         self.base_url = base_url.rstrip("/")
+        # Enrollment is not an OpenADR operation: it lives beside the spec's prefix, at <host>/api/vtn.
+        head, _, tail = self.base_url.rpartition("/")
+        self.vtn_api_url = (vtn_api_url or (head if tail == "openadr3" else self.base_url) + "/api/vtn").rstrip("/")
         self._client = httpx.Client(
             base_url=f"{self.base_url}/",
             timeout=timeout,
@@ -205,8 +211,58 @@ class FlexgatewayClient:
     # ── programs and events ──────────────────────────────────────────────
 
     def list_programs(self) -> list[dict[str, Any]]:
-        """The programs your resources are enrolled in (the operator enrolls; you never do)."""
+        """The programs Springboard has opened for enrollment, plus the ones your resources are already in."""
         return list(self._paged("programs"))
+
+    @staticmethod
+    def _words(text: str) -> list[str]:
+        return [w for w in re.split(r"[^A-Za-z0-9]+", text.upper()) if w]
+
+    def find_program(self, query: str) -> dict[str, Any]:
+        """The one program whose name matches ``query``: every word of the query (any case, any separator) must occur in
+        the program name, so ``"Longflex Arm"`` finds ``NODES_LONGFLEX_ARMED``. An exact name always wins. Several matches
+        or none is an error that lists what was seen. Only programs you can see are searched: the ones Springboard has opened
+        for enrollment, and the ones your resources are already in."""
+        programs = self.list_programs()
+        wanted = self._words(query)
+        if not wanted:
+            raise ValueError("a program name is required")
+        exact = [p for p in programs if p.get("programName", "").upper() == query.strip().upper()]
+        matches = exact or [p for p in programs if all(w in p.get("programName", "").upper() for w in wanted)]
+        if len(matches) == 1:
+            return matches[0]
+        names = ", ".join(sorted(p.get("programName", "?") for p in programs)) or "none"
+        if not matches:
+            raise LookupError(f"no program matches {query!r}. Programs you can see: {names}. You see the programs Springboard "
+                              "has opened for enrollment and the ones your resources are already in; ask Springboard if one is missing.")
+        raise LookupError(f"{query!r} matches {len(matches)} programs: {', '.join(p['programName'] for p in matches)}. Be more specific.")
+
+    def enroll_resource(self, program_id: str, resource_id: str) -> dict[str, Any]:
+        """Enroll one of your resources in a program (``POST /api/vtn/programs/{id}/resources``). The program must be open
+        for enrollment and the resource approved by Springboard. Enrolling twice is not an error here: ``already_enrolled`` says so."""
+        try:
+            response = self._client.request("POST", f"{self.vtn_api_url}/programs/{program_id}/resources",
+                                            params={"resource_id": resource_id})
+        except httpx.HTTPError as exc:
+            raise FlexgatewayApiError("POST", self.vtn_api_url, 0, f"{type(exc).__name__}") from exc
+        if response.status_code == 409 and "already enrolled" in _error_detail(response).lower():
+            return {"program_id": program_id, "resource_id": resource_id, "already_enrolled": True}
+        if not response.is_success:
+            detail = _error_detail(response)
+            if response.status_code == 404:
+                detail += " (the program is not open for enrollment, or the resource is not yours)"
+            raise FlexgatewayApiError("POST", str(response.request.url), response.status_code, detail)
+        return {**response.json(), "already_enrolled": False}
+
+    def unenroll_resource(self, program_id: str, resource_id: str) -> str:
+        """Withdraw one of your resources from a program. Returns ``withdrawn``, or ``not enrolled``; a resource Springboard has put
+        in a portfolio cannot be withdrawn by you (409): Springboard releases it."""
+        response = self._client.request("DELETE", f"{self.vtn_api_url}/programs/{program_id}/resources/{resource_id}")
+        if response.status_code == 404 and "enrollment not found" in _error_detail(response).lower():
+            return "not enrolled"
+        if not response.is_success:
+            raise FlexgatewayApiError("DELETE", str(response.request.url), response.status_code, _error_detail(response))
+        return "withdrawn"
 
     def list_events(self, program_id: str | None = None, *, active: bool | None = None) -> list[dict[str, Any]]:
         """Events targeted at your ven, your resources or your programs. ``active`` limits to those running now."""

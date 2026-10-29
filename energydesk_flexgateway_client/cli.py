@@ -55,7 +55,7 @@ def _access_token(args: argparse.Namespace) -> str:
     missing = [n for n, v in (("OAUTH_CLIENT_ID", client_id), ("OAUTH_CLIENT_SECRET", client_secret)) if not v]
     if missing:
         raise ValueError("provide FLEXGATEWAY_ACCESS_TOKEN or OAuth settings: " + ", ".join(missing))
-    # The VTN says where its token endpoint is; an explicit URL (for example the appserver's) overrides that.
+    # The VTN says where its token endpoint is; an explicit URL overrides that.
     token_url = (
         args.token_url
         or os.getenv("OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL")
@@ -98,7 +98,24 @@ def _parser() -> argparse.ArgumentParser:
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
-    commands.add_parser("list-programs", help="programs your resources are enrolled in")
+    commands.add_parser("list-programs", help="programs open for enrollment, and the ones your resources are already in")
+    find = commands.add_parser("find-program", help="show the program whose name matches, e.g. 'Longflex Arm'")
+    find.add_argument("name")
+    enroll = commands.add_parser(
+        "enroll", help="enroll this VEN's approved resources in a program Springboard has opened for enrollment")
+    enroll.add_argument("--program", required=True, help="program name or words of it, e.g. 'Longflex Arm'")
+    which = enroll.add_mutually_exclusive_group(required=True)
+    which.add_argument("--resource", action="append", metavar="NAME", help="a resourceName (repeat for several)")
+    which.add_argument("--name-prefix", help="every resource whose resourceName starts with this, e.g. sim-")
+    which.add_argument("--all", action="store_true", help="every resource of the VEN (--ven-name)")
+    enroll.add_argument("--dry-run", action="store_true", help="show what would be enrolled, change nothing")
+    unenroll = commands.add_parser("unenroll", help="withdraw this VEN's resources from a program")
+    unenroll.add_argument("--program", required=True)
+    which_out = unenroll.add_mutually_exclusive_group(required=True)
+    which_out.add_argument("--resource", action="append", metavar="NAME")
+    which_out.add_argument("--name-prefix")
+    which_out.add_argument("--all", action="store_true")
+    unenroll.add_argument("--dry-run", action="store_true")
     events = commands.add_parser("list-events")
     events.add_argument("--program-id")
     events.add_argument("--active", action="store_true", help="only events running now")
@@ -126,6 +143,8 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--out-dir", required=True)
     generate.add_argument("--days", type=int, default=30)
     generate.add_argument("--interval-minutes", type=int, default=15)
+    generate.add_argument("--name-prefix", default="",
+                          help="only resources whose resourceName starts with this (e.g. sim-): never invent data for real ones")
 
     report_readings = commands.add_parser(
         "report-readings",
@@ -160,7 +179,7 @@ def _demo(client: FlexgatewayClient, resources: list[dict[str, Any]]) -> dict[st
         "visible_resource_count": len(visible),
         "programs": [{"id": p["id"], "programName": p["programName"]} for p in programs],
         "event_count": len(client.list_events()),
-        "note": "No programs yet? The operator enrolls an approved resource in a program; it then appears here.",
+        "note": "No programs? Springboard opens programs for enrollment and approves resources; then enroll with the enroll command.",
     }
 
 
@@ -178,7 +197,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     token = _access_token(args)
-    with FlexgatewayClient(args.base_url, token, ven_name=args.ven_name) as client:
+    with FlexgatewayClient(args.base_url, token, ven_name=args.ven_name, vtn_api_url=os.getenv("FLEXGATEWAY_VTN_API_URL")) as client:
         if args.command == "list-vens":
             _print_json(client.list_vens())
         elif args.command == "ensure-ven":
@@ -192,6 +211,10 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.get_resource(args.resource_id))
         elif args.command == "list-programs":
             _print_json(client.list_programs())
+        elif args.command == "find-program":
+            _print_json(client.find_program(args.name))
+        elif args.command in ("enroll", "unenroll"):
+            _print_json(_enroll(client, args, withdraw=args.command == "unenroll"))
         elif args.command == "list-events":
             _print_json(client.list_events(args.program_id, active=True if args.active else None))
         elif args.command == "send-report":
@@ -209,7 +232,7 @@ def run(args: argparse.Namespace) -> int:
         elif args.command == "delete-subscription":
             _print_json(client.delete_subscription(args.subscription_id))
         elif args.command == "generate-readings":
-            _print_json(_generate_readings(client, Path(args.out_dir), args.days, args.interval_minutes))
+            _print_json(_generate_readings(client, Path(args.out_dir), args.days, args.interval_minutes, args.name_prefix))
         elif args.command == "report-readings":
             _print_json(_report_readings(client, Path(args.dir)))
         elif args.command == "demo":
@@ -219,15 +242,54 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _enroll(client: FlexgatewayClient, args: argparse.Namespace, *, withdraw: bool = False) -> dict[str, Any]:
+    """Enroll (or withdraw) resources of ``--ven-name`` in the program that matches ``--program``, with the VEN's own
+    credentials. Springboard decides which programs are open and which resources are approved; the server refuses the rest.
+    Re-running is safe: an enrolled resource is reported as such."""
+    if not args.ven_name:
+        raise ValueError("--ven-name (or FLEXGATEWAY_VEN_NAME) says whose resources to enroll")
+    program = client.find_program(args.program)
+    ven = next((v for v in client.list_vens() if v.get("venName") == args.ven_name), None)
+    if ven is None:
+        raise LookupError(f"no ven named {args.ven_name!r} is visible to these credentials")
+    resources = [r for r in client.list_resources() if r.get("venID") == ven["id"]]
+    if args.resource:
+        unknown = sorted(set(args.resource) - {r["resourceName"] for r in resources})
+        if unknown:
+            raise LookupError(f"ven {args.ven_name!r} has no resource named: {', '.join(unknown)}")
+        resources = [r for r in resources if r["resourceName"] in set(args.resource)]
+    elif args.name_prefix:
+        resources = [r for r in resources if r["resourceName"].startswith(args.name_prefix)]
+    if not resources:
+        raise LookupError(f"no resources of ven {args.ven_name!r} selected")
+    results = []
+    for resource in sorted(resources, key=lambda r: r["resourceName"]):
+        entry = {"resourceName": resource["resourceName"], "resourceID": resource["id"]}
+        if args.dry_run:
+            entry["status"] = "would withdraw" if withdraw else "would enroll"
+        elif withdraw:
+            entry["status"] = client.unenroll_resource(program["id"], resource["id"])
+        else:
+            outcome = client.enroll_resource(program["id"], resource["id"])
+            entry["status"] = "already enrolled" if outcome["already_enrolled"] else "enrolled"
+        results.append(entry)
+    return {"status": "ok", "dry_run": bool(args.dry_run), "program": {"id": program["id"], "programName": program["programName"]},
+            "ven": args.ven_name, "count": len(results), "resources": results}
+
+
 def _file_stem(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name) or "resource"
 
 
-def _generate_readings(client: FlexgatewayClient, out_dir: Path, days: int, interval_minutes: int) -> dict[str, Any]:
-    """One file per registered resource: its ``resourceName`` and ``DEMAND`` readings in kW, consumption positive."""
-    resources = client.list_resources()
+def _generate_readings(
+    client: FlexgatewayClient, out_dir: Path, days: int, interval_minutes: int, name_prefix: str = "",
+) -> dict[str, Any]:
+    """One file per registered resource (only those whose name starts with ``name_prefix``): its ``resourceName`` and
+    ``DEMAND`` readings in kW, consumption positive."""
+    resources = [r for r in client.list_resources() if r["resourceName"].startswith(name_prefix)]
     if not resources:
-        raise RuntimeError("no resources registered for this VEN: register some first (demo, or register-resources)")
+        raise RuntimeError(f"no resources{f' starting with {name_prefix!r}' if name_prefix else ''} registered for this VEN: "
+                           "register some first (demo, or register-resources)")
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for resource in resources:
@@ -265,7 +327,7 @@ def main() -> int:
     parser = _parser()
     try:
         return run(parser.parse_args())
-    except (FlexgatewayApiError, OSError, ValueError, RuntimeError) as exc:
+    except (FlexgatewayApiError, OSError, ValueError, RuntimeError, LookupError) as exc:
         parser.exit(1, f"error: {exc}\n")
 
 
