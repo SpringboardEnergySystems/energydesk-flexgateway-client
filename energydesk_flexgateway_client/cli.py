@@ -45,17 +45,25 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(_redact(payload), indent=2, sort_keys=True, default=str))
 
 
+OPERATOR_COMMANDS = {"enroll"}   # operator actions: they need a BL client, not the VEN's own
+
+
 def _access_token(args: argparse.Namespace) -> str:
     ready_token = args.access_token or os.getenv("FLEXGATEWAY_ACCESS_TOKEN")
     if ready_token:
         return ready_token
 
-    client_id = args.client_id or os.getenv("OAUTH_CLIENT_ID") or os.getenv("ENERGYDESK_CLIENT_ID")
-    client_secret = args.client_secret or os.getenv("OAUTH_CLIENT_SECRET") or os.getenv("ENERGYDESK_CLIENT_SECRET")
+    operator = args.command in OPERATOR_COMMANDS and os.getenv("OPERATOR_CLIENT_ID") and os.getenv("OPERATOR_CLIENT_SECRET")
+    if operator:
+        client_id = args.client_id or os.getenv("OPERATOR_CLIENT_ID")
+        client_secret = args.client_secret or os.getenv("OPERATOR_CLIENT_SECRET")
+    else:
+        client_id = args.client_id or os.getenv("OAUTH_CLIENT_ID") or os.getenv("ENERGYDESK_CLIENT_ID")
+        client_secret = args.client_secret or os.getenv("OAUTH_CLIENT_SECRET") or os.getenv("ENERGYDESK_CLIENT_SECRET")
     missing = [n for n, v in (("OAUTH_CLIENT_ID", client_id), ("OAUTH_CLIENT_SECRET", client_secret)) if not v]
     if missing:
         raise ValueError("provide FLEXGATEWAY_ACCESS_TOKEN or OAuth settings: " + ", ".join(missing))
-    # The VTN says where its token endpoint is; an explicit URL (for example the appserver's) overrides that.
+    # The VTN says where its token endpoint is; an explicit URL overrides that.
     token_url = (
         args.token_url
         or os.getenv("OAUTHCHECK_ACCESS_TOKEN_OBTAIN_URL")
@@ -98,7 +106,18 @@ def _parser() -> argparse.ArgumentParser:
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
-    commands.add_parser("list-programs", help="programs your resources are enrolled in")
+    commands.add_parser("list-programs", help="programs your resources are enrolled in (an operator/BL client sees all)")
+    find = commands.add_parser("find-program", help="show the program whose name matches, e.g. 'Longflex Arm'")
+    find.add_argument("name")
+    enroll = commands.add_parser(
+        "enroll",
+        help="enroll this VEN's resources in a program (operator action: needs a BL client, see OPERATOR_CLIENT_ID)")
+    enroll.add_argument("--program", required=True, help="program name or words of it, e.g. 'Longflex Arm'")
+    which = enroll.add_mutually_exclusive_group(required=True)
+    which.add_argument("--resource", action="append", metavar="NAME", help="a resourceName (repeat for several)")
+    which.add_argument("--name-prefix", help="every resource whose resourceName starts with this, e.g. sim-")
+    which.add_argument("--all", action="store_true", help="every resource of the VEN (--ven-name)")
+    enroll.add_argument("--dry-run", action="store_true", help="show what would be enrolled, change nothing")
     events = commands.add_parser("list-events")
     events.add_argument("--program-id")
     events.add_argument("--active", action="store_true", help="only events running now")
@@ -180,7 +199,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     token = _access_token(args)
-    with FlexgatewayClient(args.base_url, token, ven_name=args.ven_name) as client:
+    with FlexgatewayClient(args.base_url, token, ven_name=args.ven_name, vtn_api_url=os.getenv("FLEXGATEWAY_VTN_API_URL")) as client:
         if args.command == "list-vens":
             _print_json(client.list_vens())
         elif args.command == "ensure-ven":
@@ -194,6 +213,10 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.get_resource(args.resource_id))
         elif args.command == "list-programs":
             _print_json(client.list_programs())
+        elif args.command == "find-program":
+            _print_json(client.find_program(args.name))
+        elif args.command == "enroll":
+            _print_json(_enroll(client, args))
         elif args.command == "list-events":
             _print_json(client.list_events(args.program_id, active=True if args.active else None))
         elif args.command == "send-report":
@@ -219,6 +242,38 @@ def run(args: argparse.Namespace) -> int:
         else:
             raise AssertionError(f"unsupported command: {args.command}")
     return 0
+
+
+def _enroll(client: FlexgatewayClient, args: argparse.Namespace) -> dict[str, Any]:
+    """Enroll resources of ``--ven-name`` in the program that matches ``--program``. An operator action: the credentials
+    must be a BL client's. Re-running is safe (an enrolled resource is reported as such)."""
+    if not args.ven_name:
+        raise ValueError("--ven-name (or FLEXGATEWAY_VEN_NAME) says whose resources to enroll")
+    program = client.find_program(args.program)
+    ven = next((v for v in client.list_vens() if v.get("venName") == args.ven_name), None)
+    if ven is None:
+        raise LookupError(f"no ven named {args.ven_name!r} is visible to these credentials")
+    resources = [r for r in client.list_resources() if r.get("venID") == ven["id"]]
+    if args.resource:
+        unknown = sorted(set(args.resource) - {r["resourceName"] for r in resources})
+        if unknown:
+            raise LookupError(f"ven {args.ven_name!r} has no resource named: {', '.join(unknown)}")
+        resources = [r for r in resources if r["resourceName"] in set(args.resource)]
+    elif args.name_prefix:
+        resources = [r for r in resources if r["resourceName"].startswith(args.name_prefix)]
+    if not resources:
+        raise LookupError(f"no resources of ven {args.ven_name!r} selected")
+    results = []
+    for resource in sorted(resources, key=lambda r: r["resourceName"]):
+        entry = {"resourceName": resource["resourceName"], "resourceID": resource["id"]}
+        if args.dry_run:
+            entry["status"] = "would enroll"
+        else:
+            outcome = client.enroll_resource(program["id"], resource["id"])
+            entry["status"] = "already enrolled" if outcome["already_enrolled"] else "enrolled"
+        results.append(entry)
+    return {"status": "ok", "dry_run": bool(args.dry_run), "program": {"id": program["id"], "programName": program["programName"]},
+            "ven": args.ven_name, "count": len(results), "resources": results}
 
 
 def _file_stem(name: str) -> str:
@@ -271,7 +326,7 @@ def main() -> int:
     parser = _parser()
     try:
         return run(parser.parse_args())
-    except (FlexgatewayApiError, OSError, ValueError, RuntimeError) as exc:
+    except (FlexgatewayApiError, OSError, ValueError, RuntimeError, LookupError) as exc:
         parser.exit(1, f"error: {exc}\n")
 
 
