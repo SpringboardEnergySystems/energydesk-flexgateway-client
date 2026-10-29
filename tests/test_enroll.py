@@ -180,6 +180,10 @@ def test_enroll_uses_operator_credentials_when_set(monkeypatch):
     cli._access_token(argparse.Namespace(command="enroll", **base))
     cli._access_token(argparse.Namespace(command="list-resources", **base))
     assert seen == [("bl-client", "bl-secret"), ("ven-client", "ven-secret")]
+    cli._access_token(argparse.Namespace(command="find-program", **base))          # finding what to enroll in is an operator view too
+    cli._access_token(argparse.Namespace(command="list-programs", operator=True, **base))   # --operator: any command
+    cli._access_token(argparse.Namespace(command="list-programs", **base))                  # without it: the VEN's own view
+    assert seen[2:] == [("bl-client", "bl-secret"), ("bl-client", "bl-secret"), ("ven-client", "ven-secret")]
     monkeypatch.delenv("OPERATOR_CLIENT_ID")
     cli._access_token(argparse.Namespace(command="enroll", **base))
     assert seen[-1] == ("ven-client", "ven-secret")                   # falls back; the server then explains what is missing

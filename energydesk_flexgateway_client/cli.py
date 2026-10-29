@@ -45,7 +45,7 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(_redact(payload), indent=2, sort_keys=True, default=str))
 
 
-OPERATOR_COMMANDS = {"enroll"}   # operator actions: they need a BL client, not the VEN's own
+OPERATOR_COMMANDS = {"enroll", "find-program"}   # they look across programs and enroll: a BL client, not the VEN's own
 
 
 def _access_token(args: argparse.Namespace) -> str:
@@ -53,7 +53,8 @@ def _access_token(args: argparse.Namespace) -> str:
     if ready_token:
         return ready_token
 
-    operator = args.command in OPERATOR_COMMANDS and os.getenv("OPERATOR_CLIENT_ID") and os.getenv("OPERATOR_CLIENT_SECRET")
+    wants_operator = args.command in OPERATOR_COMMANDS or getattr(args, "operator", False)
+    operator = wants_operator and os.getenv("OPERATOR_CLIENT_ID") and os.getenv("OPERATOR_CLIENT_SECRET")
     if operator:
         client_id = args.client_id or os.getenv("OPERATOR_CLIENT_ID")
         client_secret = args.client_secret or os.getenv("OPERATOR_CLIENT_SECRET")
@@ -94,6 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--client-id")
     parser.add_argument("--client-secret", help="prefer OAUTH_CLIENT_SECRET in the environment")
     parser.add_argument("--scope")
+    parser.add_argument("--operator", action="store_true",
+                        help="use the operator (BL) credentials, OPERATOR_CLIENT_ID/SECRET, for any command, e.g. list-programs "
+                             "to see every program (enroll and find-program always do)")
 
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("discover", help="print where the VTN issues tokens (no authentication)")
@@ -106,7 +110,7 @@ def _parser() -> argparse.ArgumentParser:
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
-    commands.add_parser("list-programs", help="programs your resources are enrolled in (an operator/BL client sees all)")
+    commands.add_parser("list-programs", help="programs your resources are enrolled in (with --operator: every program)")
     find = commands.add_parser("find-program", help="show the program whose name matches, e.g. 'Longflex Arm'")
     find.add_argument("name")
     enroll = commands.add_parser(

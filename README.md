@@ -73,12 +73,13 @@ OPERATOR_CLIENT_SECRET=...
 ```
 
 ```sh
-flexgateway-demo list-programs                              # with the operator client this lists every program
+flexgateway-demo --operator list-programs                   # --operator: every program, not just the VEN's own
 flexgateway-demo find-program "Longflex Arm"                # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
 flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim- --dry-run
 flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim-     # or --resource NAME (repeatable) or --all
 ```
 
+`find-program` and `enroll` always use the operator credentials; `--operator` makes any other command use them too.
 `enroll` works on the resources of `--ven-name` (`FLEXGATEWAY_VEN_NAME`), prints one line per resource (`enrolled`,
 `already enrolled`, or `would enroll` with `--dry-run`) and is safe to re-run. With the VEN's own credentials it fails with a
 clear message: that route needs a BL client. If the program is not found, the error lists the programs those credentials can
