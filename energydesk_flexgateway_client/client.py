@@ -211,7 +211,7 @@ class FlexgatewayClient:
     # ── programs and events ──────────────────────────────────────────────
 
     def list_programs(self) -> list[dict[str, Any]]:
-        """The programs your resources are enrolled in (the operator enrolls; you never do)."""
+        """The programs Springboard has opened for enrollment, plus the ones your resources are already in."""
         return list(self._paged("programs"))
 
     @staticmethod
@@ -221,8 +221,8 @@ class FlexgatewayClient:
     def find_program(self, query: str) -> dict[str, Any]:
         """The one program whose name matches ``query``: every word of the query (any case, any separator) must occur in
         the program name, so ``"Longflex Arm"`` finds ``NODES_LONGFLEX_ARMED``. An exact name always wins. Several matches
-        or none is an error that lists what was seen. Only programs you can see are searched: a VEN client sees the ones
-        its resources are enrolled in, an operator (BL) client sees them all."""
+        or none is an error that lists what was seen. Only programs you can see are searched: the ones Springboard has opened
+        for enrollment, and the ones your resources are already in."""
         programs = self.list_programs()
         wanted = self._words(query)
         if not wanted:
@@ -233,13 +233,13 @@ class FlexgatewayClient:
             return matches[0]
         names = ", ".join(sorted(p.get("programName", "?") for p in programs)) or "none"
         if not matches:
-            raise LookupError(f"no program matches {query!r}. Programs you can see: {names}. A VEN client only sees programs "
-                              "its resources are enrolled in; use operator (BL) credentials to see them all.")
+            raise LookupError(f"no program matches {query!r}. Programs you can see: {names}. You see the programs Springboard "
+                              "has opened for enrollment and the ones your resources are already in; ask Springboard if one is missing.")
         raise LookupError(f"{query!r} matches {len(matches)} programs: {', '.join(p['programName'] for p in matches)}. Be more specific.")
 
     def enroll_resource(self, program_id: str, resource_id: str) -> dict[str, Any]:
-        """Enroll a resource in a program (``POST /api/vtn/programs/{id}/resources``). This is an operator action: it needs a
-        business logic (BL) client, not a VEN client. Enrolling twice is not an error here: ``already_enrolled`` says so."""
+        """Enroll one of your resources in a program (``POST /api/vtn/programs/{id}/resources``). The program must be open
+        for enrollment and the resource approved by Springboard. Enrolling twice is not an error here: ``already_enrolled`` says so."""
         try:
             response = self._client.request("POST", f"{self.vtn_api_url}/programs/{program_id}/resources",
                                             params={"resource_id": resource_id})
@@ -249,11 +249,20 @@ class FlexgatewayClient:
             return {"program_id": program_id, "resource_id": resource_id, "already_enrolled": True}
         if not response.is_success:
             detail = _error_detail(response)
-            if response.status_code in (401, 403):
-                detail += (" (enrolling needs operator credentials: a client of kind BL, created under API access in the portal; "
-                           "set OPERATOR_CLIENT_ID and OPERATOR_CLIENT_SECRET)")
+            if response.status_code == 404:
+                detail += " (the program is not open for enrollment, or the resource is not yours)"
             raise FlexgatewayApiError("POST", str(response.request.url), response.status_code, detail)
         return {**response.json(), "already_enrolled": False}
+
+    def unenroll_resource(self, program_id: str, resource_id: str) -> str:
+        """Withdraw one of your resources from a program. Returns ``withdrawn``, or ``not enrolled``; a resource Springboard has put
+        in a portfolio cannot be withdrawn by you (409): Springboard releases it."""
+        response = self._client.request("DELETE", f"{self.vtn_api_url}/programs/{program_id}/resources/{resource_id}")
+        if response.status_code == 404 and "enrollment not found" in _error_detail(response).lower():
+            return "not enrolled"
+        if not response.is_success:
+            raise FlexgatewayApiError("DELETE", str(response.request.url), response.status_code, _error_detail(response))
+        return "withdrawn"
 
     def list_events(self, program_id: str | None = None, *, active: bool | None = None) -> list[dict[str, Any]]:
         """Events targeted at your ven, your resources or your programs. ``active`` limits to those running now."""

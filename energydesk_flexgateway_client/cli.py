@@ -45,22 +45,13 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(_redact(payload), indent=2, sort_keys=True, default=str))
 
 
-OPERATOR_COMMANDS = {"enroll", "find-program"}   # they look across programs and enroll: a BL client, not the VEN's own
-
-
 def _access_token(args: argparse.Namespace) -> str:
     ready_token = args.access_token or os.getenv("FLEXGATEWAY_ACCESS_TOKEN")
     if ready_token:
         return ready_token
 
-    wants_operator = args.command in OPERATOR_COMMANDS or getattr(args, "operator", False)
-    operator = wants_operator and os.getenv("OPERATOR_CLIENT_ID") and os.getenv("OPERATOR_CLIENT_SECRET")
-    if operator:
-        client_id = args.client_id or os.getenv("OPERATOR_CLIENT_ID")
-        client_secret = args.client_secret or os.getenv("OPERATOR_CLIENT_SECRET")
-    else:
-        client_id = args.client_id or os.getenv("OAUTH_CLIENT_ID") or os.getenv("ENERGYDESK_CLIENT_ID")
-        client_secret = args.client_secret or os.getenv("OAUTH_CLIENT_SECRET") or os.getenv("ENERGYDESK_CLIENT_SECRET")
+    client_id = args.client_id or os.getenv("OAUTH_CLIENT_ID") or os.getenv("ENERGYDESK_CLIENT_ID")
+    client_secret = args.client_secret or os.getenv("OAUTH_CLIENT_SECRET") or os.getenv("ENERGYDESK_CLIENT_SECRET")
     missing = [n for n, v in (("OAUTH_CLIENT_ID", client_id), ("OAUTH_CLIENT_SECRET", client_secret)) if not v]
     if missing:
         raise ValueError("provide FLEXGATEWAY_ACCESS_TOKEN or OAuth settings: " + ", ".join(missing))
@@ -95,9 +86,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--client-id")
     parser.add_argument("--client-secret", help="prefer OAUTH_CLIENT_SECRET in the environment")
     parser.add_argument("--scope")
-    parser.add_argument("--operator", action="store_true",
-                        help="use the operator (BL) credentials, OPERATOR_CLIENT_ID/SECRET, for any command, e.g. list-programs "
-                             "to see every program (enroll and find-program always do)")
 
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("discover", help="print where the VTN issues tokens (no authentication)")
@@ -110,18 +98,24 @@ def _parser() -> argparse.ArgumentParser:
     get_resource = commands.add_parser("get-resource")
     get_resource.add_argument("resource_id")
 
-    commands.add_parser("list-programs", help="programs your resources are enrolled in (with --operator: every program)")
+    commands.add_parser("list-programs", help="programs open for enrollment, and the ones your resources are already in")
     find = commands.add_parser("find-program", help="show the program whose name matches, e.g. 'Longflex Arm'")
     find.add_argument("name")
     enroll = commands.add_parser(
-        "enroll",
-        help="enroll this VEN's resources in a program (operator action: needs a BL client, see OPERATOR_CLIENT_ID)")
+        "enroll", help="enroll this VEN's approved resources in a program Springboard has opened for enrollment")
     enroll.add_argument("--program", required=True, help="program name or words of it, e.g. 'Longflex Arm'")
     which = enroll.add_mutually_exclusive_group(required=True)
     which.add_argument("--resource", action="append", metavar="NAME", help="a resourceName (repeat for several)")
     which.add_argument("--name-prefix", help="every resource whose resourceName starts with this, e.g. sim-")
     which.add_argument("--all", action="store_true", help="every resource of the VEN (--ven-name)")
     enroll.add_argument("--dry-run", action="store_true", help="show what would be enrolled, change nothing")
+    unenroll = commands.add_parser("unenroll", help="withdraw this VEN's resources from a program")
+    unenroll.add_argument("--program", required=True)
+    which_out = unenroll.add_mutually_exclusive_group(required=True)
+    which_out.add_argument("--resource", action="append", metavar="NAME")
+    which_out.add_argument("--name-prefix")
+    which_out.add_argument("--all", action="store_true")
+    unenroll.add_argument("--dry-run", action="store_true")
     events = commands.add_parser("list-events")
     events.add_argument("--program-id")
     events.add_argument("--active", action="store_true", help="only events running now")
@@ -185,7 +179,7 @@ def _demo(client: FlexgatewayClient, resources: list[dict[str, Any]]) -> dict[st
         "visible_resource_count": len(visible),
         "programs": [{"id": p["id"], "programName": p["programName"]} for p in programs],
         "event_count": len(client.list_events()),
-        "note": "No programs yet? The operator enrolls an approved resource in a program; it then appears here.",
+        "note": "No programs? Springboard opens programs for enrollment and approves resources; then enroll with the enroll command.",
     }
 
 
@@ -219,8 +213,8 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.list_programs())
         elif args.command == "find-program":
             _print_json(client.find_program(args.name))
-        elif args.command == "enroll":
-            _print_json(_enroll(client, args))
+        elif args.command in ("enroll", "unenroll"):
+            _print_json(_enroll(client, args, withdraw=args.command == "unenroll"))
         elif args.command == "list-events":
             _print_json(client.list_events(args.program_id, active=True if args.active else None))
         elif args.command == "send-report":
@@ -248,9 +242,10 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _enroll(client: FlexgatewayClient, args: argparse.Namespace) -> dict[str, Any]:
-    """Enroll resources of ``--ven-name`` in the program that matches ``--program``. An operator action: the credentials
-    must be a BL client's. Re-running is safe (an enrolled resource is reported as such)."""
+def _enroll(client: FlexgatewayClient, args: argparse.Namespace, *, withdraw: bool = False) -> dict[str, Any]:
+    """Enroll (or withdraw) resources of ``--ven-name`` in the program that matches ``--program``, with the VEN's own
+    credentials. Springboard decides which programs are open and which resources are approved; the server refuses the rest.
+    Re-running is safe: an enrolled resource is reported as such."""
     if not args.ven_name:
         raise ValueError("--ven-name (or FLEXGATEWAY_VEN_NAME) says whose resources to enroll")
     program = client.find_program(args.program)
@@ -271,7 +266,9 @@ def _enroll(client: FlexgatewayClient, args: argparse.Namespace) -> dict[str, An
     for resource in sorted(resources, key=lambda r: r["resourceName"]):
         entry = {"resourceName": resource["resourceName"], "resourceID": resource["id"]}
         if args.dry_run:
-            entry["status"] = "would enroll"
+            entry["status"] = "would withdraw" if withdraw else "would enroll"
+        elif withdraw:
+            entry["status"] = client.unenroll_resource(program["id"], resource["id"])
         else:
             outcome = client.enroll_resource(program["id"], resource["id"])
             entry["status"] = "already enrolled" if outcome["already_enrolled"] else "enrolled"

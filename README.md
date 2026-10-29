@@ -14,15 +14,15 @@ The client never logs or prints access tokens, client secrets or webhook bearer 
 | 2 | Get a token with the OAuth client credentials Springboard issued you | `POST /auth/token` |
 | 3 | Make sure your `ven` exists (created once, by you or by Springboard) | `GET/POST /vens` |
 | 4 | Register your independently controllable resources (idempotent) | `GET/POST/PUT /resources` |
-| 5 | Springboard approves each resource and enrolls it in a program | done by the operator, not by you (`enroll` below does it with operator credentials) |
+| 5 | Springboard approves each resource and opens programs; you enroll your approved resources | `POST /api/vtn/programs/{id}/resources` (see "Enroll resources in a program") |
 | 6 | Read your programs and events | `GET /programs`, `GET /events` |
 | 7 | Report what happened, and meter readings | `POST /reports` |
 | 8 | Optionally be notified instead of polling | `POST /subscriptions` |
 
 Things worth knowing, because they differ from older versions of this API:
 
-* **Enrollment is done by the operator.** You see a program only after your resource is enrolled in it. A VEN client cannot
-  enroll itself; the `enroll` command does it with an operator (BL) client, see "Enroll resources in a program".
+* **Springboard publishes programs; you enroll.** You see the programs Springboard has opened for enrollment (and the ones your
+  resources are in). Springboard approves your resources first; then you enroll them yourself, see "Enroll resources in a program".
 * **You see only your own objects.** Visibility follows your OAuth client and the targets granted to you
   (`PROGRAM:<name>`, `VEN:<name>`, `RESOURCE:<id>`). Targets you put on your own objects are ignored.
 * **Wire format is camelCase and errors are RFC 7807** (`application/json` bodies with `title`/`detail`).
@@ -60,30 +60,25 @@ flexgateway-demo send-report --report examples/report-activation.json
 
 `flexgateway-demo --help` lists all commands.
 
-## Enroll resources in a program (operator)
+## Enroll resources in a program
 
-Enrolling is not a VEN operation: a VEN client only sees the programs its resources are already in, and cannot put a
-resource into one. An **operator** can, with a **BL client** (kind *BL*, created under *API access* in the portal) and the
-`POST /api/vtn/programs/{id}/resources` route that sits beside the OpenADR prefix. Put the operator credentials next to the
-VEN's own in `.env`; only `enroll` uses them:
-
-```
-OPERATOR_CLIENT_ID=...
-OPERATOR_CLIENT_SECRET=...
-```
+Springboard decides which programs exist and opens them for enrollment, and approves your resources. You decide which of
+your **approved** resources take part, with your own VEN credentials (no extra login):
 
 ```sh
-flexgateway-demo --operator list-programs                   # --operator: every program, not just the VEN's own
-flexgateway-demo find-program "Longflex Arm"                # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
+flexgateway-demo list-programs                        # the programs open for enrollment, and the ones you are already in
+flexgateway-demo find-program "Longflex Arm"          # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
 flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim- --dry-run
 flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim-     # or --resource NAME (repeatable) or --all
+flexgateway-demo unenroll --program "Longflex Arm" --name-prefix sim-   # withdraw again
 ```
 
-`find-program` and `enroll` always use the operator credentials; `--operator` makes any other command use them too.
-`enroll` works on the resources of `--ven-name` (`FLEXGATEWAY_VEN_NAME`), prints one line per resource (`enrolled`,
-`already enrolled`, or `would enroll` with `--dry-run`) and is safe to re-run. With the VEN's own credentials it fails with a
-clear message: that route needs a BL client. If the program is not found, the error lists the programs those credentials can
-see. `FLEXGATEWAY_VTN_API_URL` overrides the derived `<host>/api/vtn`.
+`enroll` and `unenroll` work on the resources of `--ven-name` (`FLEXGATEWAY_VEN_NAME`), print one line per resource
+(`enrolled`, `already enrolled`, `withdrawn`, or `would enroll` / `would withdraw` with `--dry-run`) and are safe to re-run.
+The server decides, and the client shows its reason: `403` the resource is not approved by Springboard yet, `404` the program
+is not open to you (or the resource is not yours), `409` already enrolled, the enrollment window is closed, or Springboard has
+put the resource in a portfolio (it may be part of a bid: Springboard has to release it). A program that is not listed is
+not open yet. `FLEXGATEWAY_VTN_API_URL` overrides the derived `<host>/api/vtn`.
 
 ## Meter data and synthetic readings
 
