@@ -122,7 +122,7 @@ class FlexgatewayClient:
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
-                "User-Agent": "energydesk-flexgateway-client/0.2.0",
+                "User-Agent": "flexclient/0.2.0",
             },
         )
         self._ven: dict[str, Any] | None = None
@@ -317,7 +317,7 @@ class FlexgatewayClient:
         for week, group in payloads.group_by_week(points):
             name = f"readings-{resource_name}-{payload_type.lower()}-{week:%Y-%m-%d}"
             body = payloads.report_request(
-                event["id"], self.ven_name or "flexgateway-demo", resource_name,
+                event["id"], self.ven_name or "flexclient", resource_name,
                 (payloads.interval(i, start, duration, {payload_type: value}) for i, (start, value) in enumerate(group)),
                 report_name=name)
             sent.append(self.update_report(existing[name], body) if name in existing else self.create_report(body))
