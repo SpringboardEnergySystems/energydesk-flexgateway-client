@@ -75,7 +75,7 @@ def _webhook_token() -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="flexgateway-demo",
+        prog="python -m flexclient",
         description="Exercise the VEN-facing EnergyDesk Flexgateway API (OpenADR 3.1.0)",
     )
     parser.add_argument("--base-url", default=os.getenv("FLEXGATEWAY_BASE_URL", DEFAULT_BASE_URL))
@@ -224,7 +224,7 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.list_reports())
         elif args.command == "subscribe":
             _print_json(client.subscribe(
-                args.callback_url, client_name=args.ven_name or "flexgateway-demo",
+                args.callback_url, client_name=args.ven_name or "flexclient",
                 objects=tuple(args.objects.split(",")), operations=tuple(args.operations.split(",")),
                 bearer_token=os.getenv("WEBHOOK_BEARER_TOKEN"), program_id=args.program_id))
         elif args.command == "list-subscriptions":

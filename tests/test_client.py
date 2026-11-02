@@ -12,10 +12,10 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from energydesk_flexgateway_client import (
+from flexclient import (
     FlexgatewayApiError, FlexgatewayClient, cli, discover_token_url, fetch_access_token, payloads,
 )
-from energydesk_flexgateway_client.webhooks import make_server
+from flexclient.webhooks import make_server
 from spec_contract import BASE, PREFIX, Contract, validate_component
 
 EXAMPLES = cli.Path(__file__).resolve().parents[1] / "examples"
@@ -356,7 +356,7 @@ def test_the_cli_reads_the_token_from_the_environment_and_discovers_the_token_ur
 
 # ── synthetic readings, reported to your own metering event ──────────────
 
-from energydesk_flexgateway_client.readings import demand_kw, generate_readings, resource_type_of  # noqa: E402
+from flexclient.readings import demand_kw, generate_readings, resource_type_of  # noqa: E402
 
 OWN_EVENT = obj("EVENT", programID="system-metering", eventName="metering", targets=["VEN:acme-ven"],
                 intervalPeriod={"start": "2026-01-01T00:00:00Z", "duration": "P9999Y"},

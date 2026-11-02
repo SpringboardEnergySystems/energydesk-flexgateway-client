@@ -35,14 +35,15 @@ Things worth knowing, because they differ from older versions of this API:
   you are enrolled in has its own `metering` event too; you do not need it.
 * **Dispatch setpoints are relative to baseline** (`DISPATCH_SETPOINT_RELATIVE`); a negative value is up-regulation.
 
-## Install
+## Setup
+
+Check out this repository and run everything from its root. There is nothing to install except the dependencies.
 
 ```sh
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-python -m pip install -e .
-cp .env.example .env     # then fill in your credentials
+python -m pip install -r requirements.txt     # requirements-dev.txt adds the test tools
+cp .env.example .env                          # then fill in your credentials
 ```
 
 The CLI loads `.env` from the directory you run it in. Variables already set in the environment win over `.env`,
@@ -51,14 +52,14 @@ so a stale `.env` never overrides what you export.
 ## Run
 
 ```sh
-flexgateway-demo discover
-flexgateway-demo demo --resources examples/transport-sites.json   # ven + resources, registered twice
-flexgateway-demo list-programs
-flexgateway-demo list-events --active
-flexgateway-demo send-report --report examples/report-activation.json
+python -m flexclient discover
+python -m flexclient demo --resources examples/transport-sites.json   # ven + resources, registered twice
+python -m flexclient list-programs
+python -m flexclient list-events --active
+python -m flexclient send-report --report examples/report-activation.json
 ```
 
-`flexgateway-demo --help` lists all commands.
+`python -m flexclient --help` lists all commands.
 
 ## Enroll resources in a program
 
@@ -66,11 +67,11 @@ Springboard decides which programs exist and opens them for enrollment, and appr
 your **approved** resources take part, with your own VEN credentials (no extra login):
 
 ```sh
-flexgateway-demo list-programs                        # the programs open for enrollment, and the ones you are already in
-flexgateway-demo find-program "Longflex Arm"          # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
-flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim- --dry-run
-flexgateway-demo enroll --program "Longflex Arm" --name-prefix sim-     # or --resource NAME (repeatable) or --all
-flexgateway-demo unenroll --program "Longflex Arm" --name-prefix sim-   # withdraw again
+python -m flexclient list-programs                        # the programs open for enrollment, and the ones you are already in
+python -m flexclient find-program "Longflex Arm"          # -> NODES_LONGFLEX_ARMED (every word must occur in the name)
+python -m flexclient enroll --program "Longflex Arm" --name-prefix sim- --dry-run
+python -m flexclient enroll --program "Longflex Arm" --name-prefix sim-     # or --resource NAME (repeatable) or --all
+python -m flexclient unenroll --program "Longflex Arm" --name-prefix sim-   # withdraw again
 ```
 
 `enroll` and `unenroll` work on the resources of `--ven-name` (`FLEXGATEWAY_VEN_NAME`), print one line per resource
@@ -86,9 +87,9 @@ Report meter data against **your own `metering` event**; no program is needed (s
 realistic volume:
 
 ```sh
-flexgateway-demo generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
+python -m flexclient generate-readings --out-dir readings --days 30 --interval-minutes 15   # one JSON file per registered resource
 # only invent data for some of them: --name-prefix sim-   (never for real resources)
-flexgateway-demo report-readings --dir readings                                          # reports every file
+python -m flexclient report-readings --dir readings                                          # reports every file
 ```
 
 * The files hold `DEMAND` in kW, **positive for consumption, negative for generation** (solar production and battery
@@ -106,13 +107,13 @@ if the server runs with `VTN_WEBHOOK_ALLOW_LOCALHOST`, which is for development)
 
 ```sh
 export WEBHOOK_BEARER_TOKEN=<a secret of your own choosing>
-flexgateway-demo serve-webhooks --port 9301                       # development receiver
-flexgateway-demo subscribe --callback-url http://127.0.0.1:9301 --objects EVENT --operations CREATE,UPDATE
+python -m flexclient serve-webhooks --port 9301                       # development receiver
+python -m flexclient subscribe --callback-url http://127.0.0.1:9301 --objects EVENT --operations CREATE,UPDATE
 ```
 
 * **`WEBHOOK_BEARER_TOKEN` is yours.** You choose it, you send it when subscribing, and the VTN sends it back to
   you in the `Authorization: Bearer` header of every notification. Your receiver must check it
-  (`energydesk_flexgateway_client.webhooks` does, in constant time). It is not related to your OAuth credentials.
+  (`flexclient.webhooks` does, in constant time). It is not related to your OAuth credentials.
 * The VTN stores it encrypted. The key for that (`SUBSCRIPTION_TOKEN_KEY`) belongs to the **server operator**;
   you never need it.
 * You are notified only of changes made after you subscribed, and only for objects you are allowed to see.

@@ -7,7 +7,7 @@ import uuid
 import httpx
 import pytest
 
-from energydesk_flexgateway_client import FlexgatewayApiError, FlexgatewayClient, cli
+from flexclient import FlexgatewayApiError, FlexgatewayClient, cli
 
 ROOT = "https://vtn.example.test/flexibility"
 BASE = f"{ROOT}/openadr3"
