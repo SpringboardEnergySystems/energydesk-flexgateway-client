@@ -6,6 +6,8 @@ if the demo stops working, either this client or the published API has changed.
 
 The client never logs or prints access tokens, client secrets or webhook bearer tokens.
 
+**New here? Read the [partner guide](docs/partner-guide.md): register resources, list programs, enroll and report meter data, step by step.**
+
 ## How the integration works
 
 | Step | What you do | Endpoint |
@@ -92,6 +94,10 @@ python -m flexclient generate-readings --out-dir readings --days 30 --interval-m
 python -m flexclient report-readings --dir readings                                          # reports every file
 ```
 
+To see the whole flow as code, read [`examples/upload_readings.py`](examples/upload_readings.py): about 40 lines that list
+your resources and send their readings in one step (`python examples/upload_readings.py --days 90 --dry-run`). Replace
+its `read_my_meter_data` function with a query against your own meter data to send real readings.
+
 * The files hold `DEMAND` in kW, **positive for consumption, negative for generation** (solar production and battery
   discharge are negative). The profiles are shaped by the resource's `RESOURCE_TYPE`, and are the same every run for a
   resource.
@@ -99,6 +105,9 @@ python -m flexclient report-readings --dir readings                             
   replaces the reports instead of adding copies**. In code: `client.report_readings(resource_name, points, payload_type="DEMAND")`.
 * The older commands `create-report`, `submit-report-data` and `get-report-data` are gone: they used endpoints that are
   not part of OpenADR 3.1.0. `send-report` posts a `reportRequest` and `list-reports` lists yours.
+  [`examples/report-activation.json`](examples/report-activation.json) is a sample `reportRequest` for it: what a resource
+  actually did (`USAGE`) against its `BASELINE` in the 15-minute intervals of a dispatch event you can see. Put that event's
+  id in `eventID` first. Meter history does not go through it: use `report-readings` or the script above.
 
 ## Webhooks
 
