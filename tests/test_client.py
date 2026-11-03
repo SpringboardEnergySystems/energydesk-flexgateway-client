@@ -484,3 +484,32 @@ def test_the_name_prefix_keeps_invented_data_away_from_real_resources(tmp_path):
     assert cli._generate_readings(client, tmp_path / "all", days=1, interval_minutes=60)["files_written"] == 4, "no prefix: all"
     with pytest.raises(RuntimeError, match="starting with 'nope-'"):
         cli._generate_readings(client, tmp_path / "none", days=1, interval_minutes=60, name_prefix="nope-")
+
+
+# ── listen ───────────────────────────────────────────────────────────────
+
+def test_listen_describes_an_event_and_shows_a_webhook_once_even_if_the_poll_sees_it_too():
+    from flexclient.listen import Listener, describe
+
+    event = {"id": "e1", "eventName": "dispatch", "programID": "p1", "modificationDateTime": "2026-11-03T10:00:00Z",
+             "intervalPeriod": {"start": "2026-11-03T11:00:00Z", "duration": "PT15M"},
+             "intervals": [{"id": 0, "payloads": [{"type": "DISPATCH_SETPOINT_RELATIVE", "values": [-50.0]}]}]}
+    text = describe({"objectType": "EVENT", "operation": "CREATE", "object": event})
+    assert "dispatch" in text and "program=p1" in text
+    assert "2026-11-03T11:00:00Z +PT15M  DISPATCH_SETPOINT_RELATIVE=-50.0" in text
+
+    class Stub:
+        def list_programs(self):
+            return []
+
+        def list_events(self):
+            return [event]
+
+    lines: list[str] = []
+    listener = Listener(Stub(), lines.append)
+    listener.on_webhook({"objectType": "EVENT", "operation": "CREATE", "object": event})
+    assert listener.poll() == 0  # already told by the webhook
+    assert len(lines) == 1 and "[webhook]" in lines[0]
+    changed = {**event, "modificationDateTime": "2026-11-03T10:05:00Z"}
+    Stub.list_events = lambda self: [changed]
+    assert listener.poll() == 1 and "[poll]" in lines[-1]

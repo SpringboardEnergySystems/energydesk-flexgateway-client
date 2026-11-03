@@ -12,6 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .client import FlexgatewayApiError, FlexgatewayClient, discover_token_url, fetch_access_token
+from .listen import listen
 from .readings import demand_kw, generate_readings, resource_type_of
 from .webhooks import make_server
 
@@ -133,6 +134,16 @@ def _parser() -> argparse.ArgumentParser:
     delete = commands.add_parser("delete-subscription")
     delete.add_argument("subscription_id")
 
+    listen_cmd = commands.add_parser(
+        "listen", help="show signals as they arrive: webhook receiver + subscription (optional) + a poll as safety net")
+    listen_cmd.add_argument("--callback-url", help="https address the VTN can reach; leave out to only poll")
+    listen_cmd.add_argument("--host", default="127.0.0.1", help="where the local receiver binds")
+    listen_cmd.add_argument("--port", type=int, default=9000)
+    listen_cmd.add_argument("--objects", default="EVENT,PROGRAM", help="comma separated object types")
+    listen_cmd.add_argument("--operations", default="CREATE,UPDATE,DELETE")
+    listen_cmd.add_argument("--program-id")
+    listen_cmd.add_argument("--poll-seconds", type=float, default=60.0, help="how often to poll (default 60)")
+
     serve = commands.add_parser("serve-webhooks", help="run a development receiver that prints notifications")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=9000)
@@ -227,6 +238,11 @@ def run(args: argparse.Namespace) -> int:
                 args.callback_url, client_name=args.ven_name or "flexclient",
                 objects=tuple(args.objects.split(",")), operations=tuple(args.operations.split(",")),
                 bearer_token=os.getenv("WEBHOOK_BEARER_TOKEN"), program_id=args.program_id))
+        elif args.command == "listen":
+            listen(client, callback_url=args.callback_url, host=args.host, port=args.port,
+                   bearer_token=os.getenv("WEBHOOK_BEARER_TOKEN"), objects=tuple(args.objects.split(",")),
+                   operations=tuple(args.operations.split(",")), program_id=args.program_id,
+                   poll_seconds=args.poll_seconds)
         elif args.command == "list-subscriptions":
             _print_json(client.list_subscriptions())
         elif args.command == "delete-subscription":

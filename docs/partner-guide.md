@@ -183,6 +183,23 @@ python -m flexclient list-events --active         # only events running now
 python -m flexclient list-events --program-id <program id>
 ```
 
+### Listen for signals
+
+To see events and programs as they change, run:
+
+```sh
+python -m flexclient listen --callback-url https://ven.example.com/openadr/callback --port 9301
+python -m flexclient listen                      # no public address: polling only
+```
+
+It prints one line per signal, for example `[webhook] EVENT CREATE dispatch program=...` followed by the intervals with their
+payloads (such as `DISPATCH_SETPOINT_RELATIVE=-50.0`). It first records what you can see now and shows only what changes
+afterwards. Webhooks are a hint, so it also polls every 60 seconds (`--poll-seconds`) and shows anything a webhook missed,
+marked `[poll]`. Ctrl-C stops it and deletes its subscription.
+
+The callback must be `https` on a public address that forwards to `--host`/`--port` (a tunnel or reverse proxy works).
+Details and the rules for failing callbacks are in the "Webhooks" section of the [README](../README.md).
+
 ---
 
 ## 5. Report meter data
@@ -275,5 +292,6 @@ Put the id of an event you can see in `eventID` first. This is not the way to se
 | | `report-readings --dir DIR` | Send readings from files |
 | | `send-report --report FILE` | Post a `reportRequest` |
 | | `list-reports` | List your reports |
-| Notifications | `subscribe`, `list-subscriptions`, `delete-subscription`, `serve-webhooks` | See the "Webhooks" section of the [README](../README.md) |
+| Notifications | `listen [--callback-url URL] [--port N] [--poll-seconds N]` | Show signals as they arrive |
+| | `subscribe`, `list-subscriptions`, `delete-subscription`, `serve-webhooks` | See the "Webhooks" section of the [README](../README.md) |
 | Everything | `demo --resources FILE` | Register twice, then list programs and events |
