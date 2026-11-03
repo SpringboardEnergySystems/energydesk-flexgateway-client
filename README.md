@@ -120,6 +120,15 @@ python -m flexclient serve-webhooks --port 9301                       # developm
 python -m flexclient subscribe --callback-url http://127.0.0.1:9301 --objects EVENT --operations CREATE,UPDATE
 ```
 
+To just **watch signals arrive**, use `listen`. It starts the receiver, subscribes, prints one readable line per
+notification and deletes the subscription when you press Ctrl-C. It also polls (every 60 s by default), because a webhook
+is a hint and the VTN does not queue notifications for a receiver that is down:
+
+```sh
+python -m flexclient listen --callback-url https://ven.example.com/openadr/callback --port 9301
+python -m flexclient listen            # no public address? polling only
+```
+
 * **`WEBHOOK_BEARER_TOKEN` is yours.** You choose it, you send it when subscribing, and the VTN sends it back to
   you in the `Authorization: Bearer` header of every notification. Your receiver must check it
   (`flexclient.webhooks` does, in constant time). It is not related to your OAuth credentials.
