@@ -1,7 +1,7 @@
 [
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-bergen-ev-load-001",
+    "resourceName": "fjellkraft-bergen-ev-load-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",
@@ -44,7 +44,7 @@
   },
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-bergen-battery-001",
+    "resourceName": "fjellkraft-bergen-battery-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",
@@ -99,7 +99,7 @@
   },
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-bergen-solar-001",
+    "resourceName": "fjellkraft-bergen-solar-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",
@@ -142,7 +142,7 @@
   },
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-oslo-ev-load-001",
+    "resourceName": "fjellkraft-oslo-ev-load-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",
@@ -185,7 +185,7 @@
   },
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-oslo-battery-001",
+    "resourceName": "fjellkraft-oslo-battery-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",
@@ -240,7 +240,7 @@
   },
   {
     "objectType": "VEN_RESOURCE_REQUEST",
-    "resourceName": "chargitect-oslo-solar-001",
+    "resourceName": "fjellkraft-oslo-solar-001",
     "attributes": [
       {
         "type": "METER_POINT_ID",

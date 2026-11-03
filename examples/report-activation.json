@@ -3,7 +3,7 @@
   "clientName": "my-ven",
   "resources": [
     {
-      "resourceName": "chargitect-bergen-battery-001",
+      "resourceName": "fjellkraft-bergen-battery-001",
       "intervals": [
         {
           "id": 0,
