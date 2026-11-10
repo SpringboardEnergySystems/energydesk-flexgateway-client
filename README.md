@@ -6,7 +6,8 @@ if the demo stops working, either this client or the published API has changed.
 
 The client never logs or prints access tokens, client secrets or webhook bearer tokens.
 
-**New here? Read the [partner guide](docs/partner-guide.md): register resources, list programs, enroll and report meter data, step by step.**
+**New here? Read the [partner guide](docs/partner-guide.md): register resources, list programs, enroll and report meter data, step by step.
+Offering a site's flexibility? Then [resource groups, available flex and dispatch](docs/groups-and-dispatch.md).**
 
 ## How the integration works
 
@@ -20,6 +21,8 @@ The client never logs or prints access tokens, client secrets or webhook bearer 
 | 6 | Read your programs and events | `GET /programs`, `GET /events` |
 | 7 | Report what happened, and meter readings | `POST /reports` |
 | 8 | Optionally be notified instead of polling | `POST /subscriptions` |
+| 9 | Group your resources per site and push the group's available flex | `PUT /api/vtn/groups/{name}`, `PUT /api/vtn/groups/{name}/availability` (see "Resource groups, available flex and dispatch") |
+| 10 | Receive a dispatch for a group, split it over the resources and report | an `EVENT` targeted `GROUP:<venName>/<groupName>` |
 
 Things worth knowing, because they differ from older versions of this API:
 
@@ -82,6 +85,37 @@ The server decides, and the client shows its reason: `403` the resource is not a
 is not open to you (or the resource is not yours), `409` already enrolled, the enrollment window is closed, or Springboard has
 put the resource in a portfolio (it may be part of a bid: Springboard has to release it). A program that is not listed is
 not open yet. `FLEXGATEWAY_VTN_API_URL` overrides the derived `<host>/api/vtn`.
+
+## Resource groups, available flex and dispatch
+
+A **group** is your reporting and dispatch unit, usually one site. You push its **available flex** every 15 minutes, and Springboard's
+dispatch arrives as **one event addressed to the group**, which you divide across the group's resources. Full walkthrough:
+[docs/groups-and-dispatch.md](docs/groups-and-dispatch.md).
+
+```sh
+python -m flexclient put-group --file examples/site-groups.json         # one group per site (idempotent; a resource is in one group)
+python -m flexclient list-groups                                        # members, event target, derived site, programs it can be dispatched in
+python -m flexclient push-availability --group fjellkraft-bergen --synthetic     # a forecast per 15 minutes, 36 hours ahead
+python -m flexclient get-availability --group fjellkraft-bergen
+python -m flexclient group-events --group fjellkraft-bergen             # dispatches addressed to the group, with the split by rated power
+python -m flexclient delete-group fjellkraft-bergen
+```
+
+Three examples show the code a real integration needs (replace the marked functions with your own planning, device control and metering):
+
+| Example | What it shows |
+| --- | --- |
+| [`examples/push_availability.py`](examples/push_availability.py) | the rolling push: forecast and available flex for the next 36 hours, every 15 minutes (`--once`, `--dry-run`) |
+| [`examples/handle_group_dispatch.py`](examples/handle_group_dispatch.py) | receive a dispatch for a group, split the setpoint over its resources, report the delivery (`--watch`, `--report`) |
+| [`examples/site-groups.json`](examples/site-groups.json) | the group definitions for the sample sites |
+
+* **A group can be dispatched in a program only when every member is enrolled there and approved.** The server works it out; `list-groups`
+  shows `eligible_programs` and which members are missing elsewhere.
+* **Pushes are latest-wins per 15-minute interval** and idempotent; a push is all or nothing, and the client checks what the server would refuse
+  (a start not on a UTC quarter hour, a negative or missing value) before sending. In code: `client.put_group(...)`,
+  `client.push_availability(group, [groups.availability_interval(...)])`, `client.group_events(group)`, `groups.split_setpoint(kw, weights)`.
+* A dispatch's setpoint is for the **whole group**, relative to baseline in kW (**negative = up-regulation**), over an absolute period.
+  A resource declares the notice it needs with `payloads.resource_request(..., min_lead_time_minutes=30)`.
 
 ## Meter data and synthetic readings
 
