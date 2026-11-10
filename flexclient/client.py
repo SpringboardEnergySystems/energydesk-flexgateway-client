@@ -18,10 +18,11 @@ from datetime import datetime
 from typing import Any, Iterable, Iterator, Mapping
 
 import re
+from urllib.parse import quote
 
 import httpx
 
-from . import payloads
+from . import groups, payloads
 
 PAGE_SIZE = 50  # the specification's maximum for ``limit``
 
@@ -29,12 +30,15 @@ PAGE_SIZE = 50  # the specification's maximum for ``limit``
 class FlexgatewayApiError(RuntimeError):
     """A non-success response from OAuth or Flexgateway."""
 
-    def __init__(self, method: str, url: str, status_code: int, detail: str):
+    def __init__(self, method: str, url: str, status_code: int, detail: str, problem: dict[str, Any] | None = None):
         super().__init__(f"{method} {url} returned {status_code}: {detail}")
         self.method = method
         self.url = url
         self.status_code = status_code
         self.detail = detail
+        # The whole problem object when the server sent one: some carry more than ``detail``, e.g. a group claim that clashes
+        # lists ``conflicts`` (resource and the group it is in), an availability push lists ``errors``, a refused dispatch ``problems``.
+        self.problem = problem or {}
 
 
 def _error_detail(response: httpx.Response) -> str:
@@ -48,6 +52,14 @@ def _error_detail(response: httpx.Response) -> str:
             if payload.get(key):
                 return str(payload[key])
     return str(payload)
+
+
+def _error_problem(response: httpx.Response) -> dict[str, Any] | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def discover_token_url(base_url: str, *, timeout: float = 15.0, transport: httpx.BaseTransport | None = None) -> str:
@@ -148,10 +160,23 @@ class FlexgatewayClient:
     ) -> Any:
         response = self._client.request(method, path.lstrip("/"), json=json, params=params)
         if not response.is_success:
-            raise FlexgatewayApiError(method, str(response.request.url), response.status_code, _error_detail(response))
+            raise FlexgatewayApiError(method, str(response.request.url), response.status_code, _error_detail(response),
+                                      _error_problem(response))
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    def _vtn(self, method: str, path: str, *, json: Mapping[str, Any] | None = None,
+             params: Mapping[str, Any] | None = None) -> httpx.Response:
+        """A call to ``/api/vtn`` (beside the OpenADR prefix): groups and availability. Returns the response; a problem raises."""
+        try:
+            response = self._client.request(method, f"{self.vtn_api_url}/{path.lstrip('/')}", json=json, params=params)
+        except httpx.HTTPError as exc:
+            raise FlexgatewayApiError(method, self.vtn_api_url, 0, f"{type(exc).__name__}") from exc
+        if not response.is_success:
+            raise FlexgatewayApiError(method, str(response.request.url), response.status_code, _error_detail(response),
+                                      _error_problem(response))
+        return response
 
     def _paged(self, path: str, params: Mapping[str, Any] | None = None) -> Iterator[dict[str, Any]]:
         """Every object of a list operation, page by page (``skip`` / ``limit``)."""
@@ -207,6 +232,64 @@ class FlexgatewayClient:
 
     def get_resource(self, resource_id: str) -> dict[str, Any]:
         return self._request("GET", f"resources/{resource_id}")
+
+    # ── resource groups and available flex (/api/vtn/groups) ─────────────
+
+    def put_group(self, group_name: str, resource_ids: Iterable[str], *, description: str | None = None) -> dict[str, Any]:
+        """Create the group, or replace its description and members in one go (idempotent: the same call twice changes nothing).
+
+        A group is your reporting and dispatch unit, usually one site: you push its available flex, and Springboard's dispatch
+        arrives as one event targeted at the group. ``resource_ids`` is the **full** member set; a resource is in at most one
+        group, and all members must sit on the same meter point. An empty list is a group with no members yet.
+
+        Returns the group as the server sees it plus ``created`` (``True`` the first time): ``target`` (the exact string events
+        are targeted with: you never build it yourself), the ``location`` derived from the members, and ``eligible_programs`` /
+        ``ineligible_programs`` (which programs the group can be dispatched in: every member must be enrolled and approved there).
+
+        Refused with ``409`` when a resource is already in another group (``error.problem["conflicts"]`` says which), and ``422``
+        when a resource is not yours or the members are on different meter points.
+        """
+        response = self._vtn("PUT", f"groups/{quote(group_name, safe='')}",
+                             json={"description": description, "resource_ids": list(resource_ids)})
+        return {**response.json(), "created": response.status_code == 201}
+
+    def list_groups(self) -> list[dict[str, Any]]:
+        """Your groups (never anyone else's), each with members, target, location and program eligibility."""
+        return self._vtn("GET", "groups").json()
+
+    def get_group(self, group_name: str) -> dict[str, Any]:
+        return self._vtn("GET", f"groups/{quote(group_name, safe='')}").json()
+
+    def delete_group(self, group_name: str) -> str:
+        """Delete a group with its availability series; its members stay registered. Returns ``deleted`` or ``not found``.
+        Refused with ``409`` while a member is in a portfolio (it may be part of a bid): Springboard releases it first."""
+        try:
+            self._vtn("DELETE", f"groups/{quote(group_name, safe='')}")
+        except FlexgatewayApiError as exc:
+            if exc.status_code == 404:
+                return "not found"
+            raise
+        return "deleted"
+
+    def push_availability(self, group_name: str, intervals: Iterable[Mapping[str, Any]]) -> int:
+        """Push your forecast of the group's available flex (see ``flexclient.groups.availability_interval``). Every interval
+        replaces what is stored for that start, and the others are left alone, so pushing the same data again is harmless: push
+        every 15 minutes, and straight away when your plan changes. Returns the number of intervals sent.
+
+        ``422`` says what is wrong with an interval (``error.problem["errors"]``): not on a UTC quarter hour, a negative or
+        missing value, another interval length than 15 minutes. A push is all or nothing."""
+        body = groups.availability_body(intervals)
+        self._vtn("PUT", f"groups/{quote(group_name, safe='')}/availability", json=body)
+        return len(body["intervals"])
+
+    def get_availability(self, group_name: str, start: datetime | None = None, end: datetime | None = None) -> dict[str, Any]:
+        """What is stored for the group in ``[start, end)``, in the shape of the push (default: now and 36 hours ahead)."""
+        params = {k: payloads.iso(v) for k, v in (("from", start), ("to", end)) if v is not None}
+        return self._vtn("GET", f"groups/{quote(group_name, safe='')}/availability", params=params).json()
+
+    def group_events(self, group: Mapping[str, Any], *, active: bool | None = None) -> list[dict[str, Any]]:
+        """The events addressed to this group (``GROUP:<ven>/<name>``): how Springboard's dispatch reaches you."""
+        return groups.events_for_group(self.list_events(active=active), group)
 
     # ── programs and events ──────────────────────────────────────────────
 

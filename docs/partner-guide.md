@@ -1,6 +1,6 @@
-# Partner guide: register, enroll, report
+# Partner guide: register, enroll, report, offer flex
 
-This guide takes you from a fresh checkout to reporting meter data. Every step is one command, run from the root of this
+This guide takes you from a fresh checkout to reporting meter data and offering a site's flexibility. Every step is one command, run from the root of this
 repository. For background on the API see the [README](../README.md).
 
 The steps, in order:
@@ -10,7 +10,8 @@ The steps, in order:
 3. [List the programs open to you](#3-list-the-programs-open-to-you)
 4. [Enroll resources in a program](#4-enroll-resources-in-a-program)
 5. [Report meter data](#5-report-meter-data)
-6. [Troubleshooting](#6-troubleshooting)
+6. [Group resources, push available flex, receive dispatch](#6-group-resources-push-available-flex-receive-dispatch)
+7. [Troubleshooting](#7-troubleshooting)
 
 Every command is `python -m flexclient <command>`. `python -m flexclient --help` lists them all, and
 `python -m flexclient <command> --help` shows the options of one.
@@ -262,7 +263,27 @@ Put the id of an event you can see in `eventID` first. This is not the way to se
 
 ---
 
-## 6. Troubleshooting
+## 6. Group resources, push available flex, receive dispatch
+
+A **group** is your reporting and dispatch unit, usually one site. You push the group's **available flex** (a forecast per 15 minutes,
+36 hours ahead, every 15 minutes) and when Springboard dispatches, **one event arrives for the group**, which you divide across its
+resources. The full walkthrough, the rules and the answers you can get are in
+**[Resource groups, available flex and dispatch](groups-and-dispatch.md)**. In short:
+
+```sh
+python -m flexclient put-group --file examples/site-groups.json              # one group per site; a resource is in one group
+python -m flexclient list-groups                                             # members, event target, programs it can be dispatched in
+python -m flexclient push-availability --group fjellkraft-bergen --synthetic  # or --file; examples/push_availability.py loops it
+python -m flexclient group-events --group fjellkraft-bergen                  # the dispatches addressed to the group
+python examples/handle_group_dispatch.py --group fjellkraft-bergen --watch   # receive, split over the resources, report
+```
+
+A group can be dispatched in a program only when **every member is enrolled there and approved** (step 4): `list-groups` says which
+members are missing.
+
+---
+
+## 7. Troubleshooting
 
 | Problem | What to do |
 | --- | --- |
@@ -271,6 +292,8 @@ Put the id of an event you can see in `eventID` first. This is not the way to se
 | `no resources ... registered for this VEN` | Register first (step 2). Check that `FLEXGATEWAY_VEN_NAME` is your VEN. |
 | `no program matches ...` | The program is not open to you. Run `list-programs` and ask Springboard. |
 | `403` when enrolling | Springboard has not approved the resource. |
+| `put-group`: `409` / `422` | A resource is already in another group (the error names it), or the members are on different meter points. See [groups](groups-and-dispatch.md#if-something-is-refused). |
+| `push-availability`: `422` | A start is not on a UTC quarter hour, or a value is negative or missing; the error lists each. |
 | `this ven has no metering event yet` | Ask Springboard. The server creates the event together with your VEN. |
 
 ## All commands at a glance
@@ -292,6 +315,11 @@ Put the id of an event you can see in `eventID` first. This is not the way to se
 | | `report-readings --dir DIR` | Send readings from files |
 | | `send-report --report FILE` | Post a `reportRequest` |
 | | `list-reports` | List your reports |
+| Groups | `put-group (--file FILE \| --name N [--resource N ...]) [--dry-run]` | Create or replace a resource group (idempotent) |
+| | `list-groups`, `get-group NAME`, `delete-group NAME` | Your groups, with members, target and program eligibility |
+| | `push-availability --group G (--file FILE \| --synthetic) [--hours N] [--dry-run]` | Push the group's forecast of available flex |
+| | `get-availability --group G [--from T] [--to T]` | What is stored for the group |
+| | `group-events --group G [--active]` | Dispatch events addressed to the group, with the split over its resources |
 | Notifications | `listen [--callback-url URL] [--port N] [--poll-seconds N]` | Show signals as they arrive |
 | | `subscribe`, `list-subscriptions`, `delete-subscription`, `serve-webhooks` | See the "Webhooks" section of the [README](../README.md) |
 | Everything | `demo --resources FILE` | Register twice, then list programs and events |

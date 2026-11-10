@@ -21,6 +21,7 @@ def resource_request(
     max_power_consumption_kw: float | None = None,
     max_power_export_kw: float | None = None,
     description: str | None = None,
+    min_lead_time_minutes: float | None = None,
     extra_attributes: Iterable[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """A ``VEN_RESOURCE_REQUEST`` (without ``venID``: the client adds it).
@@ -29,6 +30,10 @@ def resource_request(
 
     * ``METER_POINT_ID``: the meter point (GSRN) the resource sits on; the VTN looks up its balance responsible party;
     * ``RESOURCE_TYPE``: ``battery``, ``solar``, ``ev_charger`` and so on.
+
+    * ``MIN_LEAD_TIME_MINUTES`` (``min_lead_time_minutes``): the notice the resource needs before it can deliver a dispatch. Be
+      honest: Springboard never dispatches a group with less notice than its slowest member declares, and a resource that
+      declares more than a service gives is not offered in it. Leave it out if the resource needs no preparation.
 
     The standard 3.1.0 attributes ``LOCATION`` (longitude first), ``MAX_POWER_CONSUMPTION`` and ``MAX_POWER_EXPORT`` (kW)
     and ``DESCRIPTION`` are stored as sent. ``BRP_ID`` and ``GRID_NODE_ID`` are added by the VTN when you read the
@@ -47,6 +52,8 @@ def resource_request(
         attributes.append({"type": "MAX_POWER_EXPORT", "values": [max_power_export_kw]})
     if description:
         attributes.append({"type": "DESCRIPTION", "values": [description[:128]]})
+    if min_lead_time_minutes is not None:
+        attributes.append({"type": "MIN_LEAD_TIME_MINUTES", "values": [min_lead_time_minutes]})
     attributes.extend(dict(a) for a in extra_attributes)
     body: dict[str, Any] = {"objectType": "VEN_RESOURCE_REQUEST", "resourceName": resource_name}
     if attributes:
