@@ -1,0 +1,12 @@
+[
+  {
+    "groupName": "fjellkraft-bergen",
+    "description": "Bergen site: EV charging, battery and solar on one meter point",
+    "resources": ["fjellkraft-bergen-ev-load-001", "fjellkraft-bergen-battery-001", "fjellkraft-bergen-solar-001"]
+  },
+  {
+    "groupName": "fjellkraft-oslo",
+    "description": "Oslo site: EV charging, battery and solar on one meter point",
+    "resources": ["fjellkraft-oslo-ev-load-001", "fjellkraft-oslo-battery-001", "fjellkraft-oslo-solar-001"]
+  }
+]
