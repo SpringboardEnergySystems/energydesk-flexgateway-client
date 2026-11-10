@@ -42,6 +42,8 @@ def describe(notification: Mapping[str, Any]) -> str:
         head += f"  program={obj['programID']}"
     if object_type != "EVENT":
         return head
+    if obj.get("targets"):
+        head += f"  targets={','.join(obj['targets'])}"           # GROUP:<ven>/<name>: a dispatch for one of your groups
     shown = [_interval_text(obj, i) for i in (obj.get("intervals") or [])[:3]]
     more = len(obj.get("intervals") or []) - len(shown)
     lines = [head] + [f"    {text}" for text in shown]

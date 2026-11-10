@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
 from .client import FlexgatewayApiError, FlexgatewayClient, discover_token_url, fetch_access_token
+from . import groups as groupkit
 from .listen import listen
 from .readings import demand_kw, generate_readings, resource_type_of
 from .webhooks import make_server
@@ -117,6 +118,40 @@ def _parser() -> argparse.ArgumentParser:
     which_out.add_argument("--name-prefix")
     which_out.add_argument("--all", action="store_true")
     unenroll.add_argument("--dry-run", action="store_true")
+    put_group = commands.add_parser(
+        "put-group", help="create or replace a resource group: your reporting and dispatch unit, usually one site (idempotent)")
+    put_group.add_argument("--file", help="JSON: a group or an array of groups {groupName, description, resources: [resourceName]}")
+    put_group.add_argument("--name", help="groupName, instead of --file")
+    put_group.add_argument("--resource", action="append", metavar="NAME", help="a member resourceName (repeat); none = an empty group")
+    put_group.add_argument("--description")
+    put_group.add_argument("--dry-run", action="store_true", help="show what would be sent, change nothing")
+    commands.add_parser("list-groups", help="your groups: members, event target, derived site, programs each can be dispatched in")
+    get_group = commands.add_parser("get-group")
+    get_group.add_argument("name")
+    delete_group = commands.add_parser("delete-group", help="delete a group and its availability (the resources stay registered)")
+    delete_group.add_argument("name")
+
+    push = commands.add_parser(
+        "push-availability", help="push your forecast of a group's available flex (every 15 minutes, 36 hours ahead)")
+    push.add_argument("--group", required=True)
+    push_source = push.add_mutually_exclusive_group(required=True)
+    push_source.add_argument("--file", help="JSON: {\"intervals\": [{start, USAGE_FORECAST, DOWN_REGULATION_AVAILABLE, "
+                                           "UP_REGULATION_AVAILABLE}]} in kW")
+    push_source.add_argument("--synthetic", action="store_true", help="invent a plausible plan (for trying things out)")
+    push.add_argument("--hours", type=float, default=groupkit.DEFAULT_HORIZON_HOURS, help="how far ahead (default 36)")
+    push.add_argument("--forecast-kw", type=float, default=800.0, help="--synthetic: the group's typical use")
+    push.add_argument("--down-kw", type=float, default=600.0, help="--synthetic: capacity to increase consumption")
+    push.add_argument("--up-kw", type=float, default=300.0, help="--synthetic: capacity to decrease consumption")
+    push.add_argument("--dry-run", action="store_true", help="show what would be sent, send nothing")
+    get_availability = commands.add_parser("get-availability", help="what is stored for a group (default: now and 36 hours ahead)")
+    get_availability.add_argument("--group", required=True)
+    get_availability.add_argument("--from", dest="start", help="ISO 8601 with offset, e.g. 2026-11-10T06:00:00Z")
+    get_availability.add_argument("--to", dest="end")
+    group_events = commands.add_parser(
+        "group-events", help="the dispatch events addressed to a group, with how its setpoint splits over the members")
+    group_events.add_argument("--group", required=True)
+    group_events.add_argument("--active", action="store_true", help="only events running now")
+
     events = commands.add_parser("list-events")
     events.add_argument("--program-id")
     events.add_argument("--active", action="store_true", help="only events running now")
@@ -226,6 +261,20 @@ def run(args: argparse.Namespace) -> int:
             _print_json(client.find_program(args.name))
         elif args.command in ("enroll", "unenroll"):
             _print_json(_enroll(client, args, withdraw=args.command == "unenroll"))
+        elif args.command == "put-group":
+            _print_json(_put_groups(client, args))
+        elif args.command == "list-groups":
+            _print_json(client.list_groups())
+        elif args.command == "get-group":
+            _print_json(client.get_group(args.name))
+        elif args.command == "delete-group":
+            _print_json({"group": args.name, "status": client.delete_group(args.name)})
+        elif args.command == "push-availability":
+            _print_json(_push_availability(client, args))
+        elif args.command == "get-availability":
+            _print_json(client.get_availability(args.group, _instant(args.start), _instant(args.end)))
+        elif args.command == "group-events":
+            print("\n".join(_group_events(client, args)))
         elif args.command == "list-events":
             _print_json(client.list_events(args.program_id, active=True if args.active else None))
         elif args.command == "send-report":
@@ -293,6 +342,78 @@ def _enroll(client: FlexgatewayClient, args: argparse.Namespace, *, withdraw: bo
             "ven": args.ven_name, "count": len(results), "resources": results}
 
 
+def _instant(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if moment.tzinfo is None:
+        raise ValueError(f"{value!r} has no UTC offset: use e.g. 2026-11-10T06:00:00Z")
+    return moment
+
+
+def _resource_ids(client: FlexgatewayClient, names: list[str]) -> list[str]:
+    """The ids of the named resources of this VEN (the VTN takes ids; people use names)."""
+    by_name = {r["resourceName"]: r["id"] for r in client.list_resources()}
+    unknown = sorted(set(names) - set(by_name))
+    if unknown:
+        raise LookupError(f"no resource named: {', '.join(unknown)}. Register them first (register-resources).")
+    return [by_name[name] for name in names]
+
+
+def _put_groups(client: FlexgatewayClient, args: argparse.Namespace) -> dict[str, Any]:
+    """Create or replace the groups of ``--file``, or the one named by ``--name`` with its ``--resource``s. Safe to re-run:
+    a group is replaced by what you give, and ``created`` says whether it was new."""
+    if args.file:
+        wanted = [{"groupName": g["groupName"], "description": g.get("description"), "resources": list(g.get("resources") or [])}
+                  for g in _load_objects(args.file)]
+    elif args.name:
+        wanted = [{"groupName": args.name, "description": args.description, "resources": list(args.resource or [])}]
+    else:
+        raise ValueError("give --file, or --name (with --resource for each member)")
+    results = []
+    for group in wanted:
+        entry: dict[str, Any] = {"groupName": group["groupName"], "resources": group["resources"]}
+        if args.dry_run:
+            entry["status"] = "would create or replace"
+        else:
+            put = client.put_group(group["groupName"], _resource_ids(client, group["resources"]), description=group["description"])
+            entry.update(status="created" if put["created"] else "replaced", target=put["target"], location=put.get("location"),
+                         eligible_programs=put["eligible_programs"],
+                         ineligible_programs=[{"program": p["program"], "missing_resource_ids": p["missing_resource_ids"]}
+                                              for p in put["ineligible_programs"]])
+        results.append(entry)
+    return {"status": "ok", "dry_run": bool(args.dry_run), "count": len(results), "groups": results}
+
+
+def _push_availability(client: FlexgatewayClient, args: argparse.Namespace) -> dict[str, Any]:
+    if args.synthetic:
+        rows = groupkit.synthetic_availability(hours=args.hours, forecast_kw=args.forecast_kw, down_kw=args.down_kw, up_kw=args.up_kw)
+    else:
+        rows = _load_json(args.file)
+        rows = rows["intervals"] if isinstance(rows, dict) else rows
+    body = groupkit.availability_body(rows)                    # checks what the server would refuse
+    summary = {"group": args.group, "intervals": len(body["intervals"]), "first": body["intervals"][0]["start"],
+               "last": body["intervals"][-1]["start"]}
+    if args.dry_run:
+        return {"status": "ok", "dry_run": True, "would_send": summary, "sample": body["intervals"][:2]}
+    client.push_availability(args.group, body["intervals"])
+    return {"status": "ok", "dry_run": False, "sent": summary}
+
+
+def _group_events(client: FlexgatewayClient, args: argparse.Namespace) -> list[str]:
+    """Readable lines: each dispatch event of the group, its setpoint, and how it splits over the members by power."""
+    group = client.get_group(args.group)
+    by_id = {r["id"]: r for r in client.list_resources()}
+    weights = {by_id[i]["resourceName"]: groupkit.resource_power_kw(by_id[i]) for i in group["resource_ids"] if i in by_id}
+    events = client.group_events(group, active=True if args.active else None)
+    if not events:
+        return [f"no events for {group['target']}"]
+    lines: list[str] = []
+    for event in events:
+        lines.extend(groupkit.describe_dispatch(event, weights if any(weights.values()) else None))
+    return lines
+
+
 def _file_stem(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name) or "resource"
 
@@ -338,13 +459,28 @@ def _report_readings(client: FlexgatewayClient, in_dir: Path) -> dict[str, Any]:
             "total_reports": sum(r["reports"] for r in results), "results": results}
 
 
+def _problem_lines(exc: Exception) -> str:
+    """What more a problem object says, one line each: a group claim that clashes (``conflicts``), a push or a body that is wrong
+    (``errors``), a dispatch refused for several reasons (``problems``). Empty for any other error."""
+    problem = getattr(exc, "problem", None) or {}
+    lines: list[str] = []
+    for item in problem.get("conflicts") or []:
+        lines.append(f"  resource {item.get('resource_id')} is already in group '{item.get('group_name')}'")
+    lines.extend(f"  {text}" for text in problem.get("errors") or [])
+    for item in problem.get("problems") or []:
+        lines.append(f"  {item.get('detail', item)}")
+    if problem.get("meterpoint_ids"):
+        lines.append(f"  meter points: {', '.join(problem['meterpoint_ids'])}")
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
 def main() -> int:
     load_dotenv()
     parser = _parser()
     try:
         return run(parser.parse_args())
     except (FlexgatewayApiError, OSError, ValueError, RuntimeError, LookupError) as exc:
-        parser.exit(1, f"error: {exc}\n")
+        parser.exit(1, f"error: {exc}{_problem_lines(exc)}\n")
 
 
 if __name__ == "__main__":
