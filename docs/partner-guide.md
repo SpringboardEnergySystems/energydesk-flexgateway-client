@@ -2,6 +2,7 @@
 
 This guide takes you from a fresh checkout to reporting meter data and offering a site's flexibility. Every step is one command, run from the root of this
 repository. For background on the API see the [README](../README.md).
+If you only want to see the whole flow work once with the sample data, follow [Test against the test environment](test-environment.md) first.
 
 The steps, in order:
 

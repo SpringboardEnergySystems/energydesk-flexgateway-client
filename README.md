@@ -7,7 +7,8 @@ if the demo stops working, either this client or the published API has changed.
 The client never logs or prints access tokens, client secrets or webhook bearer tokens.
 
 **New here? Read the [partner guide](docs/partner-guide.md): register resources, list programs, enroll and report meter data, step by step.
-Offering a site's flexibility? Then [resource groups, available flex and dispatch](docs/groups-and-dispatch.md).**
+Offering a site's flexibility? Then [resource groups, available flex and dispatch](docs/groups-and-dispatch.md).
+Just want to try it against the test environment? [Test against the Springboard test environment](docs/test-environment.md): ten minutes, synthetic data, ends with a dispatch arriving at your machine.**
 
 ## How the integration works
 
